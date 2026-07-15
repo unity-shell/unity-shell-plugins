@@ -16,6 +16,7 @@
 
 #include <deque>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -55,12 +56,34 @@ class gsettings_config_t : public wf::config_backend_t
         const std::string&) override
     {
         config = wf::config::build_configuration(get_xml_dirs(), "", "");
+        cfg = &config;
         loop = std::make_unique<wfgs::glib_source_t>(wl_display_get_event_loop(display));
 
         for (auto& section : config.get_all_sections())
         {
             bind_section(section->get_name(), section);
         }
+    }
+
+    std::shared_ptr<section_t> get_output_section(wlr_output *output) override
+    {
+        const std::string name = "output:" + std::string(output->name);
+        if (!cfg->get_section(name))
+        {
+            if (auto tmpl = cfg->get_section("output"))
+            {
+                cfg->merge_section(tmpl->clone_with_name(name));
+            }
+        }
+
+        auto section = cfg->get_section(name);
+        if (section && bound_outputs.insert(name).second)
+        {
+            const std::string path = "/org/wayfire/output/" + std::string(output->name) + "/";
+            bind_section("output", section, &path);
+        }
+
+        return section;
     }
 
     ~gsettings_config_t() override
@@ -86,7 +109,8 @@ class gsettings_config_t : public wf::config_backend_t
         option_base_t::updated_callback_t on_changed;
     };
 
-    void bind_section(const std::string& suffix, const std::shared_ptr<section_t>& section)
+    void bind_section(const std::string& suffix, const std::shared_ptr<section_t>& section,
+        const std::string *reloc_path = nullptr)
     {
         GSettingsSchemaSource *source = g_settings_schema_source_get_default();
         if (!source)
@@ -102,12 +126,15 @@ class gsettings_config_t : public wf::config_backend_t
             return;
         }
 
-        if (g_settings_schema_get_path(schema) == nullptr)
+        const bool relocatable = g_settings_schema_get_path(schema) == nullptr;
+        if (relocatable != (reloc_path != nullptr))
         {
             return;
         }
 
-        GSettings *gs = g_settings_new_full(schema, nullptr, nullptr);
+        GSettings *gs = reloc_path
+            ? g_settings_new_full(schema, nullptr, reloc_path->c_str())
+            : g_settings_new_full(schema, nullptr, nullptr);
         settings_objects.emplace_back(gs);
 
         g_signal_connect(gs, "changed",
@@ -184,10 +211,12 @@ class gsettings_config_t : public wf::config_backend_t
         });
     }
 
+    config_manager_t *cfg = nullptr;
     std::unique_ptr<wfgs::glib_source_t> loop;
     wf::wl_timer<false> reload_timer;
     std::deque<binding_t> bindings;
     std::vector<gsettings_ptr> settings_objects;
+    std::set<std::string> bound_outputs;
     bool syncing = false;
 };
 
