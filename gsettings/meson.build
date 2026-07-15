@@ -1,9 +1,13 @@
+gio      = dependency('gio-2.0')
+wlserver = dependency('wayland-server')
+libxml   = dependency('libxml-2.0')
+
 # Shared mapping helpers reused by the schema generator and runtime backend.
 mapping = static_library('wfgs-mapping', 'gsettings-mapping.cpp', install: false)
 
 # Generates org.wayfire.gschema.xml from Wayfire metadata XML.
 gen = executable('gsettings-schema-gen', 'tools/gsettings-schema-gen.cpp',
-  link_with: mapping, dependencies: dependency('libxml-2.0'), install: false)
+  link_with: mapping, dependencies: libxml, install: false)
 
 schema = custom_target('wayfire-gschema',
   output: 'org.wayfire.gschema.xml',
@@ -30,7 +34,7 @@ custom_target('gschemas.compiled',
 
 shared_module('wf-config-gsettings', 'gsettings-config-backend.cpp', 'gsettings-glib-source.cpp', 'gsettings-seed.cpp', 'gsettings-variant.cpp',
   link_with: mapping,
-  dependencies: [wayfire, wfconfig, wlroots, dependency('wayland-server'), dependency('gio-2.0')],
+  dependencies: [wayfire, wfconfig, wlroots, wlserver, gio],
   name_prefix: '',
   install: true,
   install_dir: plugindir)
