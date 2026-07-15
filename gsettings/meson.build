@@ -26,7 +26,7 @@ custom_target('gschemas.compiled',
   command: [find_program('glib-compile-schemas'), '--targetdir', '@OUTDIR@', '@OUTDIR@'],
   build_by_default: true)
 
-shared_module('wf-config-gsettings', 'gsettings-config-backend.cpp', 'gsettings-glib-source.cpp', 'gsettings-variant.cpp',
+shared_module('wf-config-gsettings', 'gsettings-config-backend.cpp', 'gsettings-glib-source.cpp', 'gsettings-seed.cpp', 'gsettings-variant.cpp',
   link_with: mapping,
   dependencies: [wayfire, wfconfig, wlroots, dependency('wayland-server'), dependency('gio-2.0')],
   name_prefix: '',

@@ -1,5 +1,6 @@
 #include "gsettings-glib-source.hpp"
 #include "gsettings-mapping.hpp"
+#include "gsettings-seed.hpp"
 #include "gsettings-variant.hpp"
 
 #include <wayfire/config-backend.hpp>
@@ -15,12 +16,16 @@
 #include <gio/gio.h>
 
 #include <deque>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
 using namespace wf::config;
+
+using seeder_fn = std::function<std::optional<std::string>(const std::string& key)>;
 
 namespace
 {
@@ -67,7 +72,37 @@ class gsettings_config_t : public wf::config_backend_t
 
     std::shared_ptr<section_t> get_output_section(wlr_output *output) override
     {
-        return relocatable_section("output", output->name ? output->name : "");
+        seeder_fn seeder = [output](const std::string& key) -> std::optional<std::string>
+        {
+            if (key == "scale")
+            {
+                const double s = output_scale(output);
+                if (s > 1.0)
+                {
+                    return std::to_string(s);
+                }
+            }
+
+            return std::nullopt;
+        };
+
+        return relocatable_section("output", output->name ? output->name : "", seeder);
+    }
+
+    static double output_scale(wlr_output *output)
+    {
+        int rw = output->width;
+        int rh = output->height;
+        if (rw <= 0 || rh <= 0)
+        {
+            if (wlr_output_mode *mode = wlr_output_preferred_mode(output))
+            {
+                rw = mode->width;
+                rh = mode->height;
+            }
+        }
+
+        return wfgs::compute_scale(rw, rh, output->phys_width, output->phys_height);
     }
 
     std::shared_ptr<section_t> get_input_device_section(const std::string& prefix,
@@ -104,7 +139,8 @@ class gsettings_config_t : public wf::config_backend_t
         option_base_t::updated_callback_t on_changed;
     };
 
-    std::shared_ptr<section_t> relocatable_section(const std::string& prefix, const std::string& key)
+    std::shared_ptr<section_t> relocatable_section(const std::string& prefix, const std::string& key,
+        const seeder_fn& seeder = {})
     {
         const std::string name = prefix + ":" + key;
         if (!cfg->get_section(name))
@@ -119,14 +155,14 @@ class gsettings_config_t : public wf::config_backend_t
         if (section && bound_relocatable.insert(name).second)
         {
             const std::string path = "/org/wayfire/" + prefix + "/" + key + "/";
-            bind_section(prefix, section, &path);
+            bind_section(prefix, section, &path, seeder);
         }
 
         return section;
     }
 
     void bind_section(const std::string& suffix, const std::shared_ptr<section_t>& section,
-        const std::string *reloc_path = nullptr)
+        const std::string *reloc_path = nullptr, const seeder_fn& seeder = {})
     {
         GSettingsSchemaSource *source = g_settings_schema_source_get_default();
         if (!source)
@@ -158,12 +194,12 @@ class gsettings_config_t : public wf::config_backend_t
 
         for (auto& option : section->get_registered_options())
         {
-            bind_option(gs, schema, option);
+            bind_option(gs, schema, option, seeder);
         }
     }
 
     void bind_option(GSettings *gs, GSettingsSchema *schema,
-        const std::shared_ptr<option_base_t>& option)
+        const std::shared_ptr<option_base_t>& option, const seeder_fn& seeder)
     {
         const std::string key = wfgs::to_key(option->get_name());
         if (!g_settings_schema_has_key(schema, key.c_str()))
@@ -171,9 +207,19 @@ class gsettings_config_t : public wf::config_backend_t
             return;
         }
 
+        g_autoptr(GVariant) user = g_settings_get_user_value(gs, key.c_str());
+        if (user)
         {
-            g_autoptr(GVariant) v = g_settings_get_value(gs, key.c_str());
-            wfgs::apply_to_option(option, v);
+            wfgs::apply_to_option(option, user);
+        } else if (seeder)
+        {
+            if (auto seeded = seeder(key))
+            {
+                guard g{syncing};
+                option->set_value_str(*seeded);
+                g_autoptr(GVariant) v = wfgs::option_to_variant(option);
+                g_settings_set_value(gs, key.c_str(), v);
+            }
         }
 
         binding_t& b = bindings.emplace_back();
