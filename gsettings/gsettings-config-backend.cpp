@@ -67,23 +67,18 @@ class gsettings_config_t : public wf::config_backend_t
 
     std::shared_ptr<section_t> get_output_section(wlr_output *output) override
     {
-        const std::string name = "output:" + std::string(output->name);
-        if (!cfg->get_section(name))
+        return relocatable_section("output", output->name ? output->name : "");
+    }
+
+    std::shared_ptr<section_t> get_input_device_section(const std::string& prefix,
+        wlr_input_device *device) override
+    {
+        if (prefix == "input")
         {
-            if (auto tmpl = cfg->get_section("output"))
-            {
-                cfg->merge_section(tmpl->clone_with_name(name));
-            }
+            return cfg->get_section("input");
         }
 
-        auto section = cfg->get_section(name);
-        if (section && bound_outputs.insert(name).second)
-        {
-            const std::string path = "/org/wayfire/output/" + std::string(output->name) + "/";
-            bind_section("output", section, &path);
-        }
-
-        return section;
+        return relocatable_section(prefix, device->name ? device->name : "");
     }
 
     ~gsettings_config_t() override
@@ -108,6 +103,27 @@ class gsettings_config_t : public wf::config_backend_t
         std::string key;
         option_base_t::updated_callback_t on_changed;
     };
+
+    std::shared_ptr<section_t> relocatable_section(const std::string& prefix, const std::string& key)
+    {
+        const std::string name = prefix + ":" + key;
+        if (!cfg->get_section(name))
+        {
+            if (auto tmpl = cfg->get_section(prefix))
+            {
+                cfg->merge_section(tmpl->clone_with_name(name));
+            }
+        }
+
+        auto section = cfg->get_section(name);
+        if (section && bound_relocatable.insert(name).second)
+        {
+            const std::string path = "/org/wayfire/" + prefix + "/" + key + "/";
+            bind_section(prefix, section, &path);
+        }
+
+        return section;
+    }
 
     void bind_section(const std::string& suffix, const std::shared_ptr<section_t>& section,
         const std::string *reloc_path = nullptr)
@@ -216,7 +232,7 @@ class gsettings_config_t : public wf::config_backend_t
     wf::wl_timer<false> reload_timer;
     std::deque<binding_t> bindings;
     std::vector<gsettings_ptr> settings_objects;
-    std::set<std::string> bound_outputs;
+    std::set<std::string> bound_relocatable;
     bool syncing = false;
 };
 
