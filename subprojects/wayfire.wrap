@@ -1,0 +1,6 @@
+[wrap-git]
+url = https://github.com/WayfireWM/wayfire
+revision = 746bc7e96b75fa16a97d835608cc9b86fb5c9d06
+
+[provide]
+wayfire = libwayfire
