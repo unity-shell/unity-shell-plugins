@@ -38,9 +38,16 @@ class tracker
         min = low;
         max = high;
         base = live = std::clamp(from, low, high);
+        accum = 0;
     }
 
-    void drive(double delta) { live = std::clamp(base + delta, min, max); }
+    void drive(double delta)
+    {
+        accum += delta;
+        live = std::clamp(base + accum, min, max);
+    }
+
+    void hold(double v) { interacting = true; live = std::clamp(v, min, max); }
 
     void settle(double velocity)
     {
@@ -54,6 +61,6 @@ class tracker
   private:
     wf::animation::simple_animation_t anim;
     bool interacting = false;
-    double live = 0, base = 0, min = 0, max = 2;
+    double live = 0, base = 0, accum = 0, min = 0, max = 2;
 };
 }
