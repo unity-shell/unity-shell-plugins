@@ -7,6 +7,9 @@
 
 namespace wfgs
 {
+/**
+ * Integrates a GLib main context into the Wayland event loop.
+ */
 class glib_source_t
 {
   public:
@@ -16,6 +19,9 @@ class glib_source_t
     glib_source_t(const glib_source_t&) = delete;
     glib_source_t& operator =(const glib_source_t&) = delete;
 
+    /**
+     * Returns the managed GLib context.
+     */
     GMainContext *context() const
     {
         return ctx;

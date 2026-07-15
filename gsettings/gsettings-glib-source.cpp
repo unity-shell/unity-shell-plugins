@@ -2,6 +2,7 @@
 
 namespace wfgs
 {
+/* Bridge GLib dispatching into the wl_event_loop used by Wayfire. */
 glib_source_t::glib_source_t(wl_event_loop *loop) : wl(loop)
 {
     ctx = g_main_context_new();

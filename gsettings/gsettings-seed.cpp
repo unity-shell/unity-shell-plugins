@@ -77,6 +77,7 @@ double closest_supported_scale(int px_w, int px_h, double target)
 
 namespace wfgs
 {
+/* Port of the output scale seeding heuristic used for initial defaults. */
 double compute_scale(int width_px, int height_px, int width_mm, int height_mm)
 {
     if (width_px <= 0 || height_px <= 0)

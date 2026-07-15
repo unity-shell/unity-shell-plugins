@@ -1,5 +1,7 @@
+# Shared mapping helpers reused by the schema generator and runtime backend.
 mapping = static_library('wfgs-mapping', 'gsettings-mapping.cpp', install: false)
 
+# Generates org.wayfire.gschema.xml from Wayfire metadata XML.
 gen = executable('gsettings-schema-gen', 'tools/gsettings-schema-gen.cpp',
   link_with: mapping, dependencies: dependency('libxml-2.0'), install: false)
 

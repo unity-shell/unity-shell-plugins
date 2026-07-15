@@ -4,6 +4,7 @@
 
 namespace wfgs
 {
+/* Keep keys schema-safe and deterministic for round-trips. */
 std::string to_key(std::string_view name)
 {
     std::string k;

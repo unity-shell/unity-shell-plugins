@@ -15,6 +15,7 @@ namespace fs = std::filesystem;
 
 namespace
 {
+/* Flattened option descriptor extracted from metadata XML. */
 struct Key
 {
     std::string name;
@@ -25,6 +26,7 @@ struct Key
     bool skip = false;
 };
 
+/* Schema descriptor generated per plugin/object metadata root. */
 struct Schema
 {
     std::string name;

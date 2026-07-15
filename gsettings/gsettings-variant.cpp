@@ -19,6 +19,7 @@ std::shared_ptr<option_t<T>> as(const std::shared_ptr<option_base_t>& o)
 
 namespace wfgs
 {
+/* Convert runtime config options to the canonical GSettings payload form. */
 GVariant *option_to_variant(const std::shared_ptr<option_base_t>& o)
 {
     if (auto c = std::dynamic_pointer_cast<compound_option_t>(o))

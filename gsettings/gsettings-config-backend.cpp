@@ -29,6 +29,7 @@ using seeder_fn = std::function<std::optional<std::string>(const std::string& ke
 
 namespace
 {
+/* Custom deleter for owning GSettings handles in std::unique_ptr. */
 struct gsettings_deleter
 {
     void operator()(GSettings *gs) const
@@ -39,6 +40,7 @@ struct gsettings_deleter
 
 using gsettings_ptr = std::unique_ptr<GSettings, gsettings_deleter>;
 
+/* Re-entrancy guard to avoid feedback loops while syncing settings. */
 struct guard
 {
     bool& flag;
@@ -54,6 +56,7 @@ struct guard
 };
 }
 
+/* Wayfire configuration backend backed by org.wayfire.* GSettings schemas. */
 class gsettings_config_t : public wf::config_backend_t
 {
   public:
@@ -131,6 +134,7 @@ class gsettings_config_t : public wf::config_backend_t
     }
 
   private:
+    /* Synchronization record for one Wayfire option and one schema key. */
     struct binding_t
     {
         std::shared_ptr<option_base_t> option;
