@@ -1,0 +1,3 @@
+[submodule "wayfire"]
+	path = wayfire
+	url = https://github.com/WayfireWM/wayfire

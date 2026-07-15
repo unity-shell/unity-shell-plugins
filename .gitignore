@@ -1,0 +1,43 @@
+# --- Meson / Ninja build directories ---
+# Any out-of-source build tree (build/, build-dir/, builddir/, etc.)
+/build/
+/build-*/
+/builddir/
+build/
+builddir/
+
+# Meson internals (in case a build dir is nested)
+meson-private/
+meson-info/
+meson-logs/
+.mesonpy-*
+
+# --- Compiled objects / binaries ---
+*.o
+*.lo
+*.so
+*.so.*
+*.a
+*.dylib
+*.dll
+*.exe
+*.gch
+*.pch
+
+# --- gsettings generated schemas ---
+*.gschema.compiled
+gschemas.compiled
+
+# --- Editor / IDE ---
+.vscode/
+.idea/
+.cache/
+*.swp
+*.swo
+*~
+.clangd/
+.ccls-cache/
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
