@@ -54,8 +54,6 @@ class controller : public wf::per_output_plugin_instance_t,
     void end_to_desktop();
     void recenter_apps_spread();
 
-    std::function<void (mode_id)> on_mode_changed;
-
     static bool inhibited();
     static void inhibit();
     static void uninhibit();
@@ -68,6 +66,7 @@ class controller : public wf::per_output_plugin_instance_t,
 
     void reconcile();
     void apply_resources();
+    void publish_mode();
     void render_frame();
     void advance();
     void set_hook();
@@ -132,6 +131,10 @@ class controller : public wf::per_output_plugin_instance_t,
         .capabilities = wf::CAPABILITY_MANAGE_COMPOSITOR,
         .cancel = [this] { end_to_desktop(); },
     };
+
+    wf::plugin_activation_data_t state_apps{.name = "spatial-spread", .capabilities = 0};
+    wf::plugin_activation_data_t state_workspaces{.name = "spatial-wall", .capabilities = 0};
+    bool pub_apps = false, pub_workspaces = false;
 
     wf::signal::connection_t<wf::view_unmapped_signal> on_view_unmapped =
         [this] (wf::view_unmapped_signal *ev) { handle_unmapped(ev); };

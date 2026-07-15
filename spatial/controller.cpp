@@ -90,13 +90,30 @@ void controller::apply_resources()
     else { spread->clear(); }
 }
 
+void controller::publish_mode()
+{
+    const bool a = (cur == mode_id::apps_spread);
+    const bool w = (cur == mode_id::workspaces_spread);
+    if (a != pub_apps)
+    {
+        a ? output->activate_plugin(&state_apps) : output->deactivate_plugin(&state_apps);
+        pub_apps = a;
+    }
+
+    if (w != pub_workspaces)
+    {
+        w ? output->activate_plugin(&state_workspaces) : output->deactivate_plugin(&state_workspaces);
+        pub_workspaces = w;
+    }
+}
+
 void controller::reconcile()
 {
     mode_id want = current().classify(g_axis.value());
     if (want != cur)
     {
         cur = want;
-        if (on_mode_changed) { on_mode_changed(cur); }
+        publish_mode();
     }
 
     apply_resources();
@@ -148,7 +165,7 @@ void controller::settle_to(double target)
     if ((cur == mode_id::desktop) && (target > 0.0))
     {
         cur = mode_id::apps_spread;
-        if (on_mode_changed) { on_mode_changed(cur); }
+        publish_mode();
         apply_resources();
     }
 
@@ -181,7 +198,7 @@ void controller::end_to_desktop()
     filter.clear();
     g_axis.pin(0.0);
     cur = mode_id::desktop;
-    if (on_mode_changed) { on_mode_changed(cur); }
+    publish_mode();
     apply_resources();
     unhook();
 
@@ -318,7 +335,7 @@ void controller::gesture_begin(int fingers)
     if (cur == mode_id::desktop)
     {
         cur = mode_id::apps_spread;
-        if (on_mode_changed) { on_mode_changed(cur); }
+        publish_mode();
         apply_resources();
     }
 
@@ -340,7 +357,7 @@ void controller::gesture_update(double dx, double dy)
     if ((want != cur) && (want != mode_id::desktop))
     {
         cur = want;
-        if (on_mode_changed) { on_mode_changed(cur); }
+        publish_mode();
     }
 
     output->render->schedule_redraw();
