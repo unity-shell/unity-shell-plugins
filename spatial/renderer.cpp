@@ -136,6 +136,8 @@ class backdrop_node_t : public wf::scene::node_t
 
             auto ctx = make_frame_ctx(self->output);
             const wf::point_t hl = (self->hover.x >= 0) ? self->hover : ctx.cur_ws;
+            /* Dim non-focused cells only as the wall opens (g -> 2); absent on
+             * the spread and during a slide, so every pane reads full-bright. */
             const double dim = (1.0 - DIM_INACTIVE) * std::clamp(self->g - 1.0, 0.0, 1.0);
             const bool sliding = self->pan_dir.x || self->pan_dir.y || self->pan_amount != 0;
             const auto bufsz = self->buffer.get_size();
@@ -297,6 +299,10 @@ void spread_t::layout(const frame_ctx& ctx, const std::vector<std::string>& filt
     }
 }
 
+/* Row-packed preview layout adapted from gnome-shell's UnalignedLayoutStrategy:
+ * windows keep their relative sizes, small windows get a gentle scale boost, and
+ * the row count that maximises preview scale (then space) wins. Never upscales
+ * past MAX_PREVIEW. */
 void spread_t::layout_cell(wf::point_t cell,
     std::vector<wayfire_toplevel_view>& cell_views, wf::geometry_t area)
 {
@@ -436,6 +442,10 @@ void spread_t::layout_cell(wf::point_t cell,
     }
 }
 
+/* Position every window for the current frame in two steps: interpolate its real
+ * geometry toward its expose slot by ep=clamp(g,0,1) (the fan-out within its
+ * workspace), then map that onto the workspace's on-screen cell at g
+ * (cell_on_screen / pane_on_screen) through the view's 2D transformer. */
 void spread_t::place(const frame_ctx& ctx, const render_state& state)
 {
     const double ep = std::clamp(state.g, 0.0, 1.0);

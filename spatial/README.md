@@ -1,11 +1,11 @@
-# spatial plugin
+# spatial
 
 `spatial` unifies gesture-driven overview states into one staged flow:
 
 - **desktop -> apps spread** (similar to scale)
 - **apps spread -> workspaces spread** (similar to expo)
 
-## how this differs from using scale + expo together
+## comparision
 
 Compared with running separate Wayfire `scale` and `expo` plugins, `spatial` keeps both stages in a single gesture/state machine:
 

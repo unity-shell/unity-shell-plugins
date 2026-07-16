@@ -75,14 +75,22 @@ inline wf::point_t cell_at(const frame_ctx& c, wf::pointf_t p, int gap)
     return {std::clamp(i, 0, c.grid.width - 1), std::clamp(j, 0, c.grid.height - 1)};
 }
 
+/**
+ * On-screen rect of grid cell (i, j) at the axis value g in [0, 2]. The single
+ * zoom shared by the windows and the backdrop cards, so they can never diverge:
+ *   g in (0, 1]  the current cell grows from the full output to the spread card;
+ *   g in (1, 2]  the whole grid zooms out from that card to the full wall.
+ */
 inline wf::geometry_t cell_on_screen(const frame_ctx& c, int i, int j, double g, int gap)
 {
-    const double ep = std::clamp(g, 0.0, 1.0);
-    const double op = std::clamp(g - 1.0, 0.0, 1.0);
+    const double ep = std::clamp(g, 0.0, 1.0);         /* expose / card-grow phase */
+    const double op = std::clamp(g - 1.0, 0.0, 1.0);   /* zoom-out-to-wall phase */
 
     wf::geometry_t full{0, 0, c.output.width, c.output.height};
     wf::geometry_t card = lerp_rect(full, card_rect(c, gap), ep);
 
+    /* Scale the whole grid around the current cell: at op==0 the current cell
+     * lands on the card, at op==1 every cell lands on its full wall rect. */
     auto cc = cell_rect(c, c.cur_ws.x, c.cur_ws.y, gap);
     const double s0 = (double) card.width / std::max(1, cc.width);
     const double s  = lerp(s0, 1.0, op);
@@ -94,6 +102,11 @@ inline wf::geometry_t cell_on_screen(const frame_ctx& c, int i, int j, double g,
         (int) std::lround(gc.width * s), (int) std::lround(gc.height * s)};
 }
 
+/**
+ * Cell rect during a 4-finger slide: fixed-size panes (the current cell's size
+ * at g) spaced by a constant gap and panned by @amount toward @dir. Keeps the
+ * inter-workspace gap constant, unlike the grid zoom which scales it.
+ */
 inline wf::geometry_t pane_on_screen(const frame_ctx& c, int i, int j, double g, int gap,
     wf::point_t dir, double amount)
 {

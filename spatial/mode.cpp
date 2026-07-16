@@ -18,6 +18,9 @@ void desktop_mode::slide_settle(controller& c)
     c.end_to_desktop();
 }
 
+/* Hysteresis on the up-crossing only: flip to the wall once g passes
+ * 1 + STAGE_HYSTERESIS, so jitter around g==1 does not flap the input mode. The
+ * renderer is continuous across g==1; only the click/drag semantics differ. */
 mode_id apps_spread_mode::classify(double g) const
 {
     if (g <= 0.0) { return mode_id::desktop; }

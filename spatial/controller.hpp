@@ -26,7 +26,14 @@
 namespace spatial
 {
 /**
- * Per-output state machine coordinating gestures, modes and rendering.
+ * Per-output overview controller (the State-pattern context).
+ *
+ * One continuous axis g in [0, 2] is the single source of truth: g==0 desktop,
+ * g in (0, 1] the apps spread, g in (1, 2] the workspaces wall. A gesture drives
+ * g 1:1; on release a tracker animates it to the nearest of {0, 1, 2}. The mode
+ * follows g (mode::classify), and compositor resources are reconciled to the
+ * current mode idempotently through RAII toggles, so there is a single teardown
+ * path and nothing to hand-balance.
  */
 class controller : public wf::per_output_plugin_instance_t,
     public wf::pointer_interaction_t,

@@ -163,6 +163,8 @@ void controller::unhook()   { t_hooks->ensure(false); }
 
 void controller::settle_to(double target)
 {
+    /* Enter the spread up front when opening from the desktop, so there is a
+     * live overview to animate into (reconcile re-drives the mode as g rises). */
     if ((cur == mode_id::desktop) && (target > 0.0))
     {
         cur = mode_id::apps_spread;
@@ -171,6 +173,9 @@ void controller::settle_to(double target)
     }
 
     double start = g_axis.value();
+    /* Nudge an opening animation off an exact stage boundary: the first frame
+     * can fire with ~0ms elapsed and g sitting on the boundary maps to the lower
+     * stage, which would bounce us straight back. One frame covers the nudge. */
     if (target > start) { start = std::min(target, start + 1e-3); }
     g_axis.animate_to(start, target);
     set_hook();
@@ -313,6 +318,8 @@ void controller::finish_slide()
     const bool commit = (pan.value() > 0.5) && !same_ws(slide_to, slide_from);
     slide_active = false;
     if (commit) { output->wset()->set_workspace(slide_to); }
+    /* The mode that started the slide cleans up (desktop tears down, spread
+     * re-centres). cur is unchanged across a slide, so current() is that mode. */
     current().slide_settle(*this);
 }
 
@@ -329,10 +336,13 @@ void controller::gesture_begin(int fingers)
 
     if (fingers != 3) { return; }
 
+    /* Bound the swipe to one stage either side of the current MODE (a discrete
+     * anchor), not the live g, so a single swipe cannot skip desktop -> wall. */
     const double stage = (cur == mode_id::workspaces_spread) ? 2.0
         : (cur == mode_id::desktop) ? 0.0 : 1.0;
     const double from = g_axis.value();
 
+    /* Lay the spread out up front so the first motion frame does not hitch. */
     if (cur == mode_id::desktop)
     {
         cur = mode_id::apps_spread;
@@ -354,6 +364,8 @@ void controller::gesture_update(double dx, double dy)
 
     g_axis.drive(-dy / SWIPE_DISTANCE);
 
+    /* Follow the mode across the spread <-> wall boundary while dragging, but
+     * never drop to desktop mid-gesture (that teardown would drop the grab). */
     mode_id want = current().classify(g_axis.value());
     if ((want != cur) && (want != mode_id::desktop))
     {
@@ -400,6 +412,9 @@ void controller::handle_keyboard_key(wf::seat_t*, wlr_keyboard_key_event ev)
 
     if (ev.keycode == KEY_ESC) { settle_to(0.0); return; }
 
+    /* The grab owns the keyboard, so the compositor's workspace-switch binds
+     * can't reach it; arrow keys move to the neighbour and stay in the overview
+     * (the backdrop is kept across the relayout, so the desktop never blinks). */
     auto cur_ws = output->wset()->get_current_workspace();
     auto dims   = output->wset()->get_workspace_grid_size();
     wf::point_t to = cur_ws;
