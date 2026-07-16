@@ -312,7 +312,7 @@ void controller::finish_slide()
     const bool commit = (pan.value() > 0.5) && !same_ws(slide_to, slide_from);
     slide_active = false;
     if (commit) { output->wset()->set_workspace(slide_to); }
-    current().slide_settle(*this, commit);
+    current().slide_settle(*this);
 }
 
 void controller::gesture_begin(int fingers)

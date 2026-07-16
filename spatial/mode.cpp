@@ -12,7 +12,7 @@ mode_id desktop_mode::classify(double g) const
     return (g > 0.0) ? mode_id::apps_spread : mode_id::desktop;
 }
 
-void desktop_mode::slide_settle(controller& c, bool)
+void desktop_mode::slide_settle(controller& c)
 {
     c.end_to_desktop();
 }
@@ -34,7 +34,7 @@ void apps_spread_mode::on_button(controller& c, const wlr_pointer_button_event& 
     }
 }
 
-void apps_spread_mode::slide_settle(controller& c, bool)
+void apps_spread_mode::slide_settle(controller& c)
 {
     c.recenter_apps_spread();
 }

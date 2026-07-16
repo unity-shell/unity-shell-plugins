@@ -24,8 +24,6 @@ class toggled
         held ? on_() : off_();
     }
 
-    bool active() const { return held; }
-
   private:
     std::function<void ()> on_, off_;
     bool held = false;

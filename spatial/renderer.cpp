@@ -27,8 +27,8 @@ class wallpaper_stream_t : public wf::scene::node_t
         std::vector<wf::scene::render_instance_uptr> children;
 
       public:
-        instance_t(wallpaper_stream_t *self, const wf::scene::damage_callback& push) :
-            self(self)
+        instance_t(wallpaper_stream_t *node, const wf::scene::damage_callback& push) :
+            self(node)
         {
             for (auto& view : wf::collect_views_from_output(self->output,
                 {wf::scene::layer::BACKGROUND, wf::scene::layer::BOTTOM}))
@@ -167,7 +167,7 @@ class backdrop_node_t : public wf::scene::node_t
             }
         }
 
-        void compute_visibility(wf::output_t *o, wf::region_t& visible) override
+        void compute_visibility(wf::output_t *o, wf::region_t&) override
         {
             wf::region_t r = self->stream->get_bounding_box();
             for (auto& c : bg) { c->compute_visibility(o, r); }

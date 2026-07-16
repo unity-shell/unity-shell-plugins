@@ -12,7 +12,6 @@ struct mode
 {
     virtual ~mode() = default;
 
-    virtual mode_id id() const = 0;
     virtual mode_id classify(double g) const = 0;
 
     struct desired
@@ -28,31 +27,28 @@ struct mode
 
     virtual void on_button(controller&, const wlr_pointer_button_event&) {}
     virtual void on_motion(controller&) {}
-    virtual void slide_settle(controller&, bool committed) {}
+    virtual void slide_settle(controller&) {}
 };
 
 struct desktop_mode : mode
 {
-    mode_id id() const override { return mode_id::desktop; }
     mode_id classify(double g) const override;
     desired want() const override { return {}; }
     bool slides() const override { return true; }
-    void slide_settle(controller& c, bool committed) override;
+    void slide_settle(controller& c) override;
 };
 
 struct apps_spread_mode : mode
 {
-    mode_id id() const override { return mode_id::apps_spread; }
     mode_id classify(double g) const override;
     desired want() const override { return {true, true, true, true}; }
     bool slides() const override { return true; }
     void on_button(controller& c, const wlr_pointer_button_event& ev) override;
-    void slide_settle(controller& c, bool committed) override;
+    void slide_settle(controller& c) override;
 };
 
 struct workspaces_spread_mode : mode
 {
-    mode_id id() const override { return mode_id::workspaces_spread; }
     mode_id classify(double g) const override;
     desired want() const override { return {true, true, true, true}; }
     void on_button(controller& c, const wlr_pointer_button_event& ev) override;
