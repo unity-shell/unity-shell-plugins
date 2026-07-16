@@ -15,7 +15,7 @@ inline constexpr double FLING_VELOCITY = 0.6;
 inline constexpr double STAGE_HYSTERESIS = 0.15;
 
 inline constexpr int SPACING = 20;
-inline constexpr int OUTER_MARGIN = 24;
+inline constexpr int OUTER_MARGIN = 12;
 inline constexpr int WALL_GAP = 12;
 inline constexpr float DIM_INACTIVE = 0.6f;
 
