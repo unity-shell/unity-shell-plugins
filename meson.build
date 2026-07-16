@@ -13,7 +13,13 @@ if get_option('gsettings')
   subdir('gsettings')
 endif
 
+if get_option('spatial')
+  move_drag_src = files('wayfire' / 'plugins' / 'common' / 'move-drag-interface.cpp')
+  subdir('spatial')
+endif
+
 summary({
   'gsettings': get_option('gsettings'),
+  'spatial':   get_option('spatial'),
   'plugindir': plugindir,
 }, section: 'unity-shell-plugins')

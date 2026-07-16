@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<wayfire>
+	<plugin name="spatial">
+		<_short>Spatial</_short>
+		<_long>Unified window and workspace overview: a window spread that escalates to a zoomed workspace wall.</_long>
+		<category>Desktop</category>
+
+		<option name="windows-spread" type="activator">
+			<_short>Windows spread</_short>
+			<_long>Toggle the window spread of the current workspace.</_long>
+			<default>&lt;super&gt; KEY_W</default>
+		</option>
+
+		<option name="workspaces-spread" type="activator">
+			<_short>Workspaces spread</_short>
+			<_long>Show the workspaces overview; escalates from the window spread if already open.</_long>
+			<default>&lt;super&gt; KEY_S</default>
+		</option>
+
+		<option name="duration" type="animation">
+			<_short>Animation duration</_short>
+			<_long>How long the open, close, settle and wall zoom animations last.</_long>
+			<default>300ms circle</default>
+		</option>
+
+		<option name="gap-color" type="color">
+			<_short>Workspace wall gap color</_short>
+			<_long>Color filling the gaps between and around the workspace cells.</_long>
+			<default>0.239 0.239 0.239 1.0</default>
+		</option>
+	</plugin>
+</wayfire>

@@ -1,0 +1,34 @@
+#pragma once
+
+#include <functional>
+#include <utility>
+
+namespace spatial
+{
+/**
+ * Small RAII helper that toggles a pair of acquire/release callbacks.
+ */
+class toggled
+{
+  public:
+    toggled(std::function<void ()> on, std::function<void ()> off) :
+        on_(std::move(on)), off_(std::move(off))
+    {}
+
+    toggled(const toggled&) = delete;
+    toggled& operator =(const toggled&) = delete;
+
+    ~toggled() { ensure(false); }
+
+    void ensure(bool want)
+    {
+        if (want == held) { return; }
+        held = want;
+        held ? on_() : off_();
+    }
+
+  private:
+    std::function<void ()> on_, off_;
+    bool held = false;
+};
+}

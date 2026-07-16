@@ -1,1 +1,2 @@
 option('gsettings', type: 'boolean', value: true, description: 'Build the GSettings configuration backend plugin.')
+option('spatial', type: 'boolean', value: true, description: 'Build the spatial overview plugin.')
