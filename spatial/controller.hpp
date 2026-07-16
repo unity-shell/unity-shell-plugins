@@ -25,6 +25,9 @@
 
 namespace spatial
 {
+/**
+ * Per-output state machine coordinating gestures, modes and rendering.
+ */
 class controller : public wf::per_output_plugin_instance_t,
     public wf::pointer_interaction_t,
     public wf::keyboard_interaction_t

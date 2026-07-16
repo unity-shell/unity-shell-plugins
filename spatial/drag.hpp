@@ -12,6 +12,9 @@ namespace spatial
 {
 class spread_t;
 
+/**
+ * Handles picking, dragging and dropping spread thumbnails between workspaces.
+ */
 class window_drag_t
 {
   public:

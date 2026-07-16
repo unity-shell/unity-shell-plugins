@@ -19,6 +19,7 @@
 
 namespace spatial
 {
+/* Scene stream node that captures background/bottom layers into a texture. */
 class wallpaper_stream_t : public wf::scene::node_t
 {
     class instance_t : public wf::scene::render_instance_t

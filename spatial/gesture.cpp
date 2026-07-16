@@ -12,6 +12,7 @@ namespace spatial
 {
 static constexpr uint32_t HISTORY_MS = 150;
 
+/* Gesture signal bridge with short history-based swipe velocity estimation. */
 struct swipe_gesture_t::impl
 {
     swipe_gesture_t& owner;

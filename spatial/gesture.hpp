@@ -5,6 +5,9 @@
 
 namespace spatial
 {
+/**
+ * Aggregates low-level swipe/pinch signals into gesture callbacks.
+ */
 class swipe_gesture_t
 {
   public:

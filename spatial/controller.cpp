@@ -17,6 +17,7 @@
 
 namespace spatial
 {
+/* Cross-output inhibit reference count used by IPC hooks. */
 static int s_inhibit = 0;
 bool controller::inhibited() { return s_inhibit > 0; }
 void controller::inhibit() { s_inhibit++; }

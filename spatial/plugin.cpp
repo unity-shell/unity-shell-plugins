@@ -13,6 +13,9 @@
 
 namespace spatial
 {
+/**
+ * Global plugin entrypoint wiring activators and IPC control methods.
+ */
 class plugin : public wf::plugin_interface_t,
     public wf::per_output_tracker_mixin_t<controller>
 {

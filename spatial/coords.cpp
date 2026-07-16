@@ -9,6 +9,9 @@
 
 namespace spatial
 {
+/**
+ * Collect current output geometry and pointer data used for spread layout.
+ */
 frame_ctx make_frame_ctx(wf::output_t *o)
 {
     frame_ctx c;

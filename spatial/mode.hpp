@@ -8,6 +8,9 @@ class controller;
 
 enum class mode_id { desktop, apps_spread, workspaces_spread };
 
+/**
+ * Abstract state behavior used to drive spatial interaction stages.
+ */
 struct mode
 {
     virtual ~mode() = default;

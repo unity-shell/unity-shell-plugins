@@ -14,6 +14,9 @@
 
 namespace spatial
 {
+/**
+ * Frame parameters consumed by the spread renderer on each repaint.
+ */
 struct render_state
 {
     double      g = 0.0;
@@ -24,6 +27,9 @@ struct render_state
 
 class backdrop_node_t;
 
+/**
+ * Maintains overview layout, per-view transforms and backdrop composition.
+ */
 class spread_t
 {
   public:

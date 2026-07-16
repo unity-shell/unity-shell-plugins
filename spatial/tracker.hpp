@@ -11,6 +11,9 @@
 
 namespace spatial
 {
+/**
+ * Picks the nearest stage target, with optional fling bias.
+ */
 inline double snap_target(double live, double velocity, double lo, double hi)
 {
     double t;
@@ -23,6 +26,9 @@ inline double snap_target(double live, double velocity, double lo, double hi)
 class tracker
 {
   public:
+    /**
+     * Tracks an interaction-driven value and animates settling transitions.
+     */
     explicit tracker(const std::string& duration_option) :
         anim{wf::option_wrapper_t<wf::animation_description_t>{duration_option}}
     {}

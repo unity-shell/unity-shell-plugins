@@ -5,6 +5,9 @@
 
 namespace spatial
 {
+/**
+ * Small RAII helper that toggles a pair of acquire/release callbacks.
+ */
 class toggled
 {
   public:

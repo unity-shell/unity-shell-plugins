@@ -7,6 +7,7 @@
 
 namespace spatial
 {
+/* Desktop -> apps-spread threshold classifier. */
 mode_id desktop_mode::classify(double g) const
 {
     return (g > 0.0) ? mode_id::apps_spread : mode_id::desktop;

@@ -9,6 +9,9 @@ namespace wf { class output_t; }
 
 namespace spatial
 {
+/**
+ * Snapshot of output/workspace geometry used while placing spread content.
+ */
 struct frame_ctx
 {
     wf::point_t      cur_ws{0, 0};
@@ -18,12 +21,21 @@ struct frame_ctx
     wf::pointf_t     cursor{0, 0};
 };
 
+/**
+ * Builds a frame context from the current output/workspace state.
+ */
 frame_ctx make_frame_ctx(wf::output_t *output);
 
 namespace coords
 {
+/**
+ * Linear interpolation helper for scalar values.
+ */
 inline double lerp(double a, double b, double t) { return a + (b - a) * t; }
 
+/**
+ * Linear interpolation helper for geometry rectangles.
+ */
 inline wf::geometry_t lerp_rect(wf::geometry_t a, wf::geometry_t b, double t)
 {
     return {(int) lerp(a.x, b.x, t), (int) lerp(a.y, b.y, t),

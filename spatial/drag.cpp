@@ -15,6 +15,7 @@
 
 namespace spatial
 {
+/* Internal drag engine integrating spread thumbnails with move-drag core API. */
 struct window_drag_t::impl
 {
     wf::output_t *output;
