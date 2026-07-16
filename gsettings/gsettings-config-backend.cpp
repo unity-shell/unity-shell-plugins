@@ -211,18 +211,29 @@ class gsettings_config_t : public wf::config_backend_t
             return;
         }
 
-        g_autoptr(GVariant) user = g_settings_get_user_value(gs, key.c_str());
-        if (user)
+        /* Apply the effective value: a user value if set, otherwise the schema
+         * default (which carries the session's gschema override, e.g. the unity
+         * autostart / plugin list). This is NOT the metadata default, so it must
+         * be applied rather than assumed a no-op. */
         {
-            wfgs::apply_to_option(option, user);
-        } else if (seeder)
+            g_autoptr(GVariant) v = g_settings_get_value(gs, key.c_str());
+            wfgs::apply_to_option(option, v);
+        }
+
+        /* Seed a computed default (e.g. output scale) only when the key has no
+         * user value; the gschema default is already applied above. */
+        if (seeder)
         {
-            if (auto seeded = seeder(key))
+            g_autoptr(GVariant) user = g_settings_get_user_value(gs, key.c_str());
+            if (!user)
             {
-                guard g{syncing};
-                option->set_value_str(*seeded);
-                g_autoptr(GVariant) v = wfgs::option_to_variant(option);
-                g_settings_set_value(gs, key.c_str(), v);
+                if (auto seeded = seeder(key))
+                {
+                    guard g{syncing};
+                    option->set_value_str(*seeded);
+                    g_autoptr(GVariant) sv = wfgs::option_to_variant(option);
+                    g_settings_set_value(gs, key.c_str(), sv);
+                }
             }
         }
 

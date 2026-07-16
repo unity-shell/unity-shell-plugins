@@ -1,6 +1,6 @@
 project('unity-shell-plugins', 'cpp',
-  version: '0.1',
-  meson_version: '>= 0.59',
+  version: '26',
+  meson_version: '>= 1.0',
   default_options: ['cpp_std=c++17', 'warning_level=1'])
 
 wayfire  = dependency('wayfire')
