@@ -34,6 +34,7 @@ class glib_source_t
     static int on_fd(int fd, uint32_t mask, void *data);
     static int on_timeout(void *data);
     static void on_idle(void *data);
+    static void on_loop_destroy(wl_listener *listener, void *data);
 
     wl_event_loop *wl;
     GMainContext  *ctx;
@@ -43,5 +44,6 @@ class glib_source_t
     std::vector<wl_event_source*> fd_sources;
     wl_event_source *timer = nullptr;
     bool dispatch_queued = false;
+    wl_listener loop_destroy;
 };
 }

@@ -9,25 +9,46 @@ glib_source_t::glib_source_t(wl_event_loop *loop) : wl(loop)
     g_main_context_push_thread_default(ctx);
     g_main_context_acquire(ctx);
 
+    loop_destroy.notify = &glib_source_t::on_loop_destroy;
+    wl_event_loop_add_destroy_listener(wl, &loop_destroy);
+
     timer = wl_event_loop_add_timer(wl, &glib_source_t::on_timeout, this);
     resync();
 }
 
 glib_source_t::~glib_source_t()
 {
-    for (auto *src : fd_sources)
+    /* Only touch the event sources while the loop is still alive; if the loop
+     * was destroyed first it already freed them (see on_loop_destroy). */
+    if (wl)
     {
-        wl_event_source_remove(src);
-    }
+        wl_list_remove(&loop_destroy.link);
 
-    if (timer)
-    {
-        wl_event_source_remove(timer);
+        for (auto *src : fd_sources)
+        {
+            wl_event_source_remove(src);
+        }
+
+        if (timer)
+        {
+            wl_event_source_remove(timer);
+        }
     }
 
     g_main_context_release(ctx);
     g_main_context_pop_thread_default(ctx);
     g_main_context_unref(ctx);
+}
+
+void glib_source_t::on_loop_destroy(wl_listener *listener, void *)
+{
+    glib_source_t *self = wl_container_of(listener, self, loop_destroy);
+
+    /* The loop is going away and frees its own sources; drop our handles so the
+     * destructor does not remove them a second time. */
+    self->wl = nullptr;
+    self->fd_sources.clear();
+    self->timer = nullptr;
 }
 
 void glib_source_t::resync()

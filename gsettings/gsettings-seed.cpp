@@ -1,5 +1,7 @@
 #include "gsettings-seed.hpp"
 
+#include <wayfire/nonstd/wlroots.hpp>
+
 #include <algorithm>
 #include <cmath>
 
@@ -73,10 +75,41 @@ double closest_supported_scale(int px_w, int px_h, double target)
 
     return best;
 }
+
+double output_scale(wlr_output *output)
+{
+    int rw = output->width;
+    int rh = output->height;
+    if (rw <= 0 || rh <= 0)
+    {
+        if (wlr_output_mode *mode = wlr_output_preferred_mode(output))
+        {
+            rw = mode->width;
+            rh = mode->height;
+        }
+    }
+
+    return wfgs::compute_scale(rw, rh, output->phys_width, output->phys_height);
+}
 }
 
 namespace wfgs
 {
+seeder_fn output_seeder(wlr_output *output)
+{
+    return [output](const std::string& key) -> std::optional<std::string>
+    {
+        if (key == "scale")
+        {
+            /* Computed override: write the auto-detected scale instead of the
+             * schema default, so HiDPI outputs come up scaled on first connect. */
+            return std::to_string(output_scale(output));
+        }
+
+        return std::nullopt;
+    };
+}
+
 /* Port of the output scale seeding heuristic used for initial defaults. */
 double compute_scale(int width_px, int height_px, int width_mm, int height_mm)
 {

@@ -25,7 +25,7 @@
 
 using namespace wf::config;
 
-using seeder_fn = std::function<std::optional<std::string>(const std::string& key)>;
+using wfgs::seeder_fn;
 
 namespace
 {
@@ -75,37 +75,8 @@ class gsettings_config_t : public wf::config_backend_t
 
     std::shared_ptr<section_t> get_output_section(wlr_output *output) override
     {
-        seeder_fn seeder = [output](const std::string& key) -> std::optional<std::string>
-        {
-            if (key == "scale")
-            {
-                const double s = output_scale(output);
-                if (s > 1.0)
-                {
-                    return std::to_string(s);
-                }
-            }
-
-            return std::nullopt;
-        };
-
-        return relocatable_section("output", output->name ? output->name : "", seeder);
-    }
-
-    static double output_scale(wlr_output *output)
-    {
-        int rw = output->width;
-        int rh = output->height;
-        if (rw <= 0 || rh <= 0)
-        {
-            if (wlr_output_mode *mode = wlr_output_preferred_mode(output))
-            {
-                rw = mode->width;
-                rh = mode->height;
-            }
-        }
-
-        return wfgs::compute_scale(rw, rh, output->phys_width, output->phys_height);
+        return relocatable_section("output", output->name ? output->name : "",
+            wfgs::output_seeder(output));
     }
 
     std::shared_ptr<section_t> get_input_device_section(const std::string& prefix,
@@ -121,12 +92,22 @@ class gsettings_config_t : public wf::config_backend_t
 
     ~gsettings_config_t() override
     {
+        /* Drain queued writes and stop all callbacks before tearing down the
+         * GSettings objects and the GLib<->wl bridge, so dconf's async writer is
+         * not left serializing into a half-closed D-Bus connection. */
+        g_settings_sync();
+
         for (auto& b : bindings)
         {
             if (b.option)
             {
                 b.option->rem_updated_handler(&b.on_changed);
             }
+        }
+
+        for (auto& gs : settings_objects)
+        {
+            g_signal_handlers_disconnect_by_data(gs.get(), this);
         }
 
         settings_objects.clear();
@@ -220,20 +201,26 @@ class gsettings_config_t : public wf::config_backend_t
             wfgs::apply_to_option(option, v);
         }
 
-        /* Seed a computed default (e.g. output scale) only when the key has no
-         * user value; the gschema default is already applied above. */
+        /* Materialize a seeded section (a relocatable output) on attach: write
+         * every key that has no user value yet, so the whole section shows up
+         * visible and editable in dconf the moment the output is connected. The
+         * seeder supplies a computed override for specific keys (e.g. the scale);
+         * the rest are written with the effective value applied above. */
         if (seeder)
         {
             g_autoptr(GVariant) user = g_settings_get_user_value(gs, key.c_str());
             if (!user)
             {
-                if (auto seeded = seeder(key))
+                guard g{syncing};
+                if (auto computed = seeder(key))
                 {
-                    guard g{syncing};
-                    option->set_value_str(*seeded);
-                    g_autoptr(GVariant) sv = wfgs::option_to_variant(option);
-                    g_settings_set_value(gs, key.c_str(), sv);
+                    option->set_value_str(*computed);
                 }
+
+                /* g_settings_set_value consumes the floating reference returned
+                 * by option_to_variant; wrapping it in g_autoptr would add a
+                 * second unref that frees it under dconf's async writer thread. */
+                g_settings_set_value(gs, key.c_str(), wfgs::option_to_variant(option));
             }
         }
 
@@ -249,8 +236,7 @@ class gsettings_config_t : public wf::config_backend_t
             }
 
             guard g{syncing};
-            g_autoptr(GVariant) v = wfgs::option_to_variant(b.option);
-            g_settings_set_value(b.settings, b.key.c_str(), v);
+            g_settings_set_value(b.settings, b.key.c_str(), wfgs::option_to_variant(b.option));
         };
         option->add_updated_handler(&b.on_changed);
     }
