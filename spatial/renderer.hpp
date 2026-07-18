@@ -68,6 +68,7 @@ class spread_t
     wf::output_t *output;
     std::map<wayfire_toplevel_view, view_data> views;
     std::vector<wayfire_toplevel_view> hidden_views;
+    std::vector<wayfire_toplevel_view> shown_minimized;
     std::shared_ptr<backdrop_node_t> backdrop;
     wf::point_t laid_out_ws{-1, -1};
 };

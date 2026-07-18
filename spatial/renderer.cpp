@@ -282,6 +282,14 @@ void spread_t::layout(const frame_ctx& ctx, const std::vector<std::string>& filt
             continue;
         }
 
+        /* Minimized views stay mapped but have their node disabled; enable it so
+         * the preview is visible and restore the minimized state on teardown. */
+        if (v->minimized)
+        {
+            wf::scene::set_node_enabled(v->get_root_node(), true);
+            shown_minimized.push_back(v);
+        }
+
         auto vg = v->get_geometry();
         const int rx = (int) std::floor((vg.x + vg.width / 2.0) / ow);
         const int ry = (int) std::floor((vg.y + vg.height / 2.0) / oh);
@@ -501,6 +509,9 @@ void spread_t::clear_windows()
 
     for (auto& v : hidden_views) { wf::scene::set_node_enabled(v->get_root_node(), true); }
     hidden_views.clear();
+
+    for (auto& v : shown_minimized) { wf::scene::set_node_enabled(v->get_root_node(), false); }
+    shown_minimized.clear();
 }
 
 void spread_t::clear()
@@ -528,6 +539,13 @@ void spread_t::forget(wayfire_toplevel_view view)
     {
         wf::scene::set_node_enabled(view->get_root_node(), true);
         hidden_views.erase(h);
+    }
+
+    if (auto m = std::find(shown_minimized.begin(), shown_minimized.end(), view);
+        m != shown_minimized.end())
+    {
+        wf::scene::set_node_enabled(view->get_root_node(), false);
+        shown_minimized.erase(m);
     }
 }
 
