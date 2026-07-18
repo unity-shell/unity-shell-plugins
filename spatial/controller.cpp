@@ -389,7 +389,7 @@ void controller::gesture_end(double, double vy)
 void controller::gesture_pinch(int fingers, double scale)
 {
     if (inhibited() || (fingers < 3) || !cursor_here()) { return; }
-    if (std::abs(scale - 1.0) >= 0.05) { toggle_workspaces_spread(); }
+    if (std::abs(scale - 1.0) >= PINCH_THRESHOLD) { toggle_workspaces_spread(); }
 }
 
 void controller::handle_pointer_button(const wlr_pointer_button_event& ev)

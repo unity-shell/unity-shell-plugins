@@ -14,6 +14,11 @@ inline constexpr double SWIPE_DISTANCE = 300.0;
 inline constexpr double FLING_VELOCITY = 0.6;
 inline constexpr double STAGE_HYSTERESIS = 0.15;
 
+/* Minimum pinch scale change to accept as a deliberate pinch. Kept high so the
+ * incidental finger drift libinput may report as a pinch during a 3-finger
+ * swipe does not trip the workspaces-spread toggle. */
+inline constexpr double PINCH_THRESHOLD = 0.25;
+
 inline constexpr int SPACING = 20;
 inline constexpr int OUTER_MARGIN = 36;
 inline constexpr int WALL_GAP = 12;
