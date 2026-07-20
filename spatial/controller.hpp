@@ -97,6 +97,7 @@ class controller : public wf::per_output_plugin_instance_t,
     void run_next_frame(std::function<void ()> fn);
     void handle_mapped(wf::view_mapped_signal *ev);
     void handle_unmapped(wf::view_unmapped_signal *ev);
+    void handle_focus_request(wf::view_focus_request_signal *ev);
     bool cursor_here() const;
 
     std::unique_ptr<spread_t> spread;
@@ -117,6 +118,7 @@ class controller : public wf::per_output_plugin_instance_t,
 
     std::vector<std::string> filter;
     bool   gesturing = false;
+    bool   self_activating = false;
     double gp_lo = 0, gp_hi = 2;
 
     bool slide_active = false;
@@ -150,5 +152,7 @@ class controller : public wf::per_output_plugin_instance_t,
         [this] (wf::view_unmapped_signal *ev) { handle_unmapped(ev); };
     wf::signal::connection_t<wf::view_mapped_signal> on_view_mapped =
         [this] (wf::view_mapped_signal *ev) { handle_mapped(ev); };
+    wf::signal::connection_t<wf::view_focus_request_signal> on_focus_request =
+        [this] (wf::view_focus_request_signal *ev) { handle_focus_request(ev); };
 };
 }

@@ -66,6 +66,7 @@ void controller::init()
         });
 
     wf::get_core().connect(&on_view_unmapped);
+    wf::get_core().connect(&on_focus_request);
     output->connect(&on_view_mapped);
 
     swipe.on_begin  = [this] (int f) { gesture_begin(f); };
@@ -79,6 +80,7 @@ void controller::fini()
     end_to_desktop();
     on_view_unmapped.disconnect();
     on_view_mapped.disconnect();
+    on_focus_request.disconnect();
 }
 
 void controller::apply_resources()
@@ -155,6 +157,7 @@ void controller::advance()
     }
 
     reconcile();
+    if (spread->animating()) { output->render->schedule_redraw(); return; }
     unhook();
 }
 
@@ -184,14 +187,24 @@ void controller::settle_to(double target)
 void controller::relayout()
 {
     spread->relayout(make_frame_ctx(output), filter);
+
+    /* The slots ease toward their new targets on their own; keep the frame loop
+     * running so that easing is drawn when the spread is otherwise settled. */
+    if (!g_axis.active() && !slide_active && spread->animating()) { set_hook(); }
+
     render_frame();
     output->render->schedule_redraw();
 }
 
 void controller::activate_window(wayfire_toplevel_view v, wf::point_t ws)
 {
+    /* Our own focus_request would otherwise trip the external-activation
+     * dismissal below; settle_to(0.0) already closes the spread here. */
+    self_activating = true;
     if (v->minimized) { wf::get_core().default_wm->minimize_request(v, false); }
     wf::get_core().default_wm->focus_request(v);
+    self_activating = false;
+
     output->wset()->set_workspace(ws);
     settle_to(0.0);
 }
@@ -342,9 +355,13 @@ void controller::gesture_begin(int fingers)
         : (cur == mode_id::desktop) ? 0.0 : 1.0;
     const double from = g_axis.value();
 
-    /* Lay the spread out up front so the first motion frame does not hitch. */
+    /* Lay the spread out up front so the first motion frame does not hitch. A
+     * fresh swipe from the desktop is an unfiltered overview: drop any app-id
+     * filter left over from an earlier spread-app (as toggle_apps_spread does),
+     * otherwise the swipe would only show that one app. */
     if (cur == mode_id::desktop)
     {
+        filter.clear();
         cur = mode_id::apps_spread;
         publish_mode();
         apply_resources();
@@ -468,5 +485,18 @@ void controller::handle_unmapped(wf::view_unmapped_signal *ev)
     drag->forget(v);
     spread->forget(v);
     if (!gesturing && !slide_active && !g_axis.animating()) { relayout(); }
+}
+
+void controller::handle_focus_request(wf::view_focus_request_signal *ev)
+{
+    /* An app was activated from outside the spread (e.g. the launcher): close
+     * the overview so the activation is revealed, like gnome-shell's overview.
+     * Our own window selection is guarded by self_activating. */
+    if (self_activating || (cur == mode_id::desktop)) { return; }
+
+    auto v = wf::toplevel_cast(ev->view);
+    if (!v || (v->get_output() != output)) { return; }
+
+    close_overview();
 }
 }
