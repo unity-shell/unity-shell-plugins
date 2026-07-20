@@ -342,10 +342,9 @@ void spread_t::layout(const frame_ctx& ctx, const std::vector<std::string>& filt
     }
 }
 
-/* Row-packed preview layout adapted from gnome-shell's UnalignedLayoutStrategy:
- * windows keep their relative sizes, small windows get a gentle scale boost, and
- * the row count that maximises preview scale (then space) wins. Never upscales
- * past MAX_PREVIEW. */
+/* Row-packed preview layout: windows keep their relative sizes, small windows
+ * get a gentle scale boost, and the row count that maximises preview scale (then
+ * space) wins. Never upscales past MAX_PREVIEW. */
 void spread_t::layout_cell(wf::point_t cell,
     std::vector<wayfire_toplevel_view>& cell_views, wf::geometry_t area)
 {

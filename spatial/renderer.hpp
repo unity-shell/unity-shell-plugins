@@ -30,7 +30,7 @@ struct render_state
 class backdrop_node_t;
 
 /**
- * Maintains overview layout, per-view transforms and backdrop composition.
+ * Maintains spread layout, per-view transforms and backdrop composition.
  */
 class spread_t
 {

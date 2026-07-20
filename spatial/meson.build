@@ -1,7 +1,6 @@
 shared_module('spatial',
   'plugin.cpp',
   'controller.cpp',
-  'mode.cpp',
   'renderer.cpp',
   'coords.cpp',
   'gesture.cpp',
