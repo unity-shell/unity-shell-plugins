@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 #include <utility>
 
 #include <wayfire/core.hpp>
@@ -265,37 +266,71 @@ void spread_t::relayout(const frame_ctx& ctx, const std::vector<std::string>& fi
 
 void spread_t::layout(const frame_ctx& ctx, const std::vector<std::string>& filter)
 {
-    clear_windows();
     ensure_backdrop();
     laid_out_ws = ctx.cur_ws;
 
     const int ow = ctx.output.width, oh = ctx.output.height;
 
+    /* Partition the workspace views: surface minimized ones, gather the app-id
+     * filtered-out ones, and bucket the rest by workspace cell. */
     std::map<std::pair<int, int>, std::vector<wayfire_toplevel_view>> cells;
+    std::set<wayfire_toplevel_view> wanted;
+    std::vector<wayfire_toplevel_view> want_hidden;
+
     for (auto& v : output->wset()->get_views(wf::WSET_MAPPED_ONLY))
     {
         if (!filter.empty() &&
             (std::find(filter.begin(), filter.end(), v->get_app_id()) == filter.end()))
         {
-            wf::scene::set_node_enabled(v->get_root_node(), false);
-            hidden_views.push_back(v);
+            want_hidden.push_back(v);
             continue;
         }
 
-        /* Minimized views stay mapped but have their node disabled; enable it so
-         * the preview is visible and restore the minimized state on teardown. */
-        if (v->minimized)
+        /* Minimized views stay mapped but have their node disabled; enable it
+         * once for the lifetime of the spread (restored in clear()). The enabled
+         * state is a shared counter Wayfire also drives for workspace visibility,
+         * so toggling it per relayout would drift and strand views hidden. */
+        if (v->minimized &&
+            std::find(shown_minimized.begin(), shown_minimized.end(), v) == shown_minimized.end())
         {
             wf::scene::set_node_enabled(v->get_root_node(), true);
             shown_minimized.push_back(v);
         }
 
-        auto vg = v->get_geometry();
-        const int rx = (int) std::floor((vg.x + vg.width / 2.0) / ow);
-        const int ry = (int) std::floor((vg.y + vg.height / 2.0) / oh);
-        cells[{rx, ry}].push_back(v);
+        /* Bucket by Wayfire's own (grid-clamped) view->workspace mapping, not a
+         * raw floor of the geometry centre which can land in a phantom cell. */
+        const wf::point_t vws = output->wset()->get_view_main_workspace(v);
+        cells[{vws.x - ctx.cur_ws.x, vws.y - ctx.cur_ws.y}].push_back(v);
+        wanted.insert(v);
     }
 
+    /* Reconcile the filter's hidden set idempotently (enable un-hidden views,
+     * disable newly hidden ones), so node-enable never drifts across relayouts. */
+    for (auto& v : hidden_views)
+    {
+        if (std::find(want_hidden.begin(), want_hidden.end(), v) == want_hidden.end())
+        {
+            wf::scene::set_node_enabled(v->get_root_node(), true);
+        }
+    }
+    for (auto& v : want_hidden)
+    {
+        if (std::find(hidden_views.begin(), hidden_views.end(), v) == hidden_views.end())
+        {
+            wf::scene::set_node_enabled(v->get_root_node(), false);
+        }
+    }
+    hidden_views = std::move(want_hidden);
+
+    /* Drop previews for views that are no longer shown. */
+    for (auto it = views.begin(); it != views.end(); )
+    {
+        if (!wanted.count(it->first)) { detach_family(it->second); it = views.erase(it); }
+        else { ++it; }
+    }
+
+    /* Aim each shown view's slot at its freshly computed target; persistent
+     * views ease from their current slot, so the arrangement never snaps. */
     for (auto& [cell, cell_views] : cells)
     {
         wf::geometry_t area = {
@@ -438,10 +473,8 @@ void spread_t::layout_cell(wf::point_t cell,
                 ? row_y + (row_h - clone_h) / 2.0
                 : row_y + row_h - clone_h;
 
-            auto& d = views[w.view];
-            d.tr     = ensure_transformer(w.view);
-            d.cell   = cell;
-            d.expose = {(int) clone_x, (int) clone_y, (int) clone_w, (int) clone_h};
+            aim_slot(w.view, cell,
+                {(int) clone_x, (int) clone_y, (int) clone_w, (int) clone_h});
 
             x += cell_w + spacing;
         }
@@ -461,12 +494,12 @@ void spread_t::place(const frame_ctx& ctx, const render_state& state)
 
     for (auto& [view, d] : views)
     {
-        if (!d.tr) { continue; }
+        if (!d.slot || d.dragging) { continue; }
 
-        auto vg = view->get_geometry();
+        auto pvg = view->get_geometry();
         wf::geometry_t region = {d.cell.x * ctx.output.width, d.cell.y * ctx.output.height,
             ctx.output.width, ctx.output.height};
-        wf::geometry_t in_region = wf::interpolate(vg, d.expose, ep);
+        wf::geometry_t in_region = wf::interpolate(pvg, (wf::geometry_t) *d.slot, ep);
 
         const int i = ctx.cur_ws.x + d.cell.x, j = ctx.cur_ws.y + d.cell.y;
         auto cell = sliding
@@ -474,16 +507,30 @@ void spread_t::place(const frame_ctx& ctx, const render_state& state)
             : coords::cell_on_screen(ctx, i, j, state.g, WALL_GAP);
 
         wf::geometry_t fin = wf::scale_box(region, cell, in_region);
-
-        auto node = view->get_transformed_node();
-        node->begin_transform_update();
-        d.tr->scale_x       = (float) fin.width  / std::max(1, vg.width);
-        d.tr->scale_y       = (float) fin.height / std::max(1, vg.height);
-        d.tr->translation_x = (float) ((fin.x + fin.width  / 2.0) - (vg.x + vg.width  / 2.0));
-        d.tr->translation_y = (float) ((fin.y + fin.height / 2.0) - (vg.y + vg.height / 2.0));
-        node->end_transform_update();
-
         d.screen = fin;
+
+        /* Scale and translate the whole window family (the toplevel plus its
+         * dialogs) as one rigid unit about the toplevel's centre, so dialogs ride
+         * on their parent preview at the right size and position. */
+        const double sx = (double) fin.width  / std::max(1, pvg.width);
+        const double sy = (double) fin.height / std::max(1, pvg.height);
+        const double pcx = pvg.x + pvg.width / 2.0, pcy = pvg.y + pvg.height / 2.0;
+        const double fcx = fin.x + fin.width / 2.0, fcy = fin.y + fin.height / 2.0;
+
+        reconcile_family(view, d);
+        for (auto& [member, tr] : d.family)
+        {
+            auto mvg = member->get_geometry();
+            const double mcx = mvg.x + mvg.width / 2.0, mcy = mvg.y + mvg.height / 2.0;
+
+            auto node = member->get_transformed_node();
+            node->begin_transform_update();
+            tr->scale_x       = (float) sx;
+            tr->scale_y       = (float) sy;
+            tr->translation_x = (float) ((fcx + sx * (mcx - pcx)) - mcx);
+            tr->translation_y = (float) ((fcy + sy * (mcy - pcy)) - mcy);
+            node->end_transform_update();
+        }
     }
 
     if (backdrop) { backdrop->update(state.g, state.pan_dir, state.pan_amount, state.hover); }
@@ -494,29 +541,81 @@ void spread_t::render(const frame_ctx& ctx, const render_state& state)
     place(ctx, state);
 }
 
-void spread_t::clear_windows()
+bool spread_t::animating()
 {
     for (auto& [view, d] : views)
     {
-        if (d.tr)
-        {
-            view->get_transformed_node()
-                ->rem_transformer<wf::scene::view_2d_transformer_t>(PLUGIN_NAME);
-        }
+        if (d.slot && d.slot->running()) { return true; }
     }
 
+    return false;
+}
+
+void spread_t::aim_slot(wayfire_toplevel_view view, wf::point_t cell, wf::geometry_t target)
+{
+    auto& d = views[view];
+    d.cell     = cell;
+    d.dragging = false;
+
+    if (!d.slot)
+    {
+        /* A freshly shown preview starts already at its target so it just
+         * appears (the g-axis still fans it out from the real window). */
+        d.slot = std::make_unique<wf::geometry_animation_t>(anim_dur);
+        d.slot->set_start(target);
+    } else
+    {
+        d.slot->set_start(*d.slot);
+    }
+
+    d.slot->set_end(target);
+    d.slot->start();
+}
+
+void spread_t::detach_family(view_data& d)
+{
+    for (auto& [member, tr] : d.family)
+    {
+        member->get_transformed_node()
+            ->rem_transformer<wf::scene::view_2d_transformer_t>(PLUGIN_NAME);
+    }
+
+    d.family.clear();
+}
+
+void spread_t::reconcile_family(wayfire_toplevel_view parent, view_data& d)
+{
+    std::set<wayfire_toplevel_view> current;
+    for (auto& m : parent->enumerate_views()) { current.insert(m); }
+
+    for (auto it = d.family.begin(); it != d.family.end(); )
+    {
+        if (!current.count(it->first))
+        {
+            it->first->get_transformed_node()
+                ->rem_transformer<wf::scene::view_2d_transformer_t>(PLUGIN_NAME);
+            it = d.family.erase(it);
+        } else { ++it; }
+    }
+
+    for (auto& m : current)
+    {
+        if (!d.family.count(m)) { d.family[m] = ensure_transformer(m); }
+    }
+}
+
+void spread_t::clear()
+{
+    for (auto& [view, d] : views) { detach_family(d); }
     views.clear();
 
     for (auto& v : hidden_views) { wf::scene::set_node_enabled(v->get_root_node(), true); }
     hidden_views.clear();
 
+    /* Restore the minimized views we made visible, once, when the spread ends. */
     for (auto& v : shown_minimized) { wf::scene::set_node_enabled(v->get_root_node(), false); }
     shown_minimized.clear();
-}
 
-void spread_t::clear()
-{
-    clear_windows();
     remove_backdrop();
     laid_out_ws = {-1, -1};
 }
@@ -525,13 +624,22 @@ void spread_t::forget(wayfire_toplevel_view view)
 {
     if (auto it = views.find(view); it != views.end())
     {
-        if (it->second.tr)
-        {
-            view->get_transformed_node()
-                ->rem_transformer<wf::scene::view_2d_transformer_t>(PLUGIN_NAME);
-        }
-
+        detach_family(it->second);
         views.erase(it);
+    } else
+    {
+        /* Not a preview of its own; it may be a dialog in some family. */
+        for (auto& [parent, d] : views)
+        {
+            auto f = d.family.find(view);
+            if (f != d.family.end())
+            {
+                view->get_transformed_node()
+                    ->rem_transformer<wf::scene::view_2d_transformer_t>(PLUGIN_NAME);
+                d.family.erase(f);
+                break;
+            }
+        }
     }
 
     if (auto h = std::find(hidden_views.begin(), hidden_views.end(), view);
@@ -552,11 +660,12 @@ void spread_t::forget(wayfire_toplevel_view view)
 void spread_t::release_for_drag(wayfire_toplevel_view view)
 {
     auto it = views.find(view);
-    if ((it == views.end()) || !it->second.tr) { return; }
+    if (it == views.end()) { return; }
 
-    view->get_transformed_node()
-        ->rem_transformer<wf::scene::view_2d_transformer_t>(PLUGIN_NAME);
-    it->second.tr = nullptr;
+    /* Hand the window to the drag core: drop our transformers and stop placing
+     * it until the next relayout re-slots it. */
+    detach_family(it->second);
+    it->second.dragging = true;
 }
 
 wayfire_toplevel_view spread_t::view_at(wf::pointf_t local) const

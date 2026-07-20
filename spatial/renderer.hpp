@@ -9,6 +9,8 @@
 #include <wayfire/output.hpp>
 #include <wayfire/toplevel-view.hpp>
 #include <wayfire/view-transform.hpp>
+#include <wayfire/option-wrapper.hpp>
+#include <wayfire/plugins/common/geometry-animation.hpp>
 
 #include "coords.hpp"
 
@@ -41,31 +43,46 @@ class spread_t
     void render(const frame_ctx& ctx, const render_state& state);
     void clear();
 
+    /** True while any preview is still easing toward its slot. */
+    bool animating();
+
     void forget(wayfire_toplevel_view view);
     void release_for_drag(wayfire_toplevel_view view);
     wayfire_toplevel_view view_at(wf::pointf_t local) const;
     wf::geometry_t thumb_of(wayfire_toplevel_view view) const;
 
   private:
+    using transformer_t = std::shared_ptr<wf::scene::view_2d_transformer_t>;
+
+    /**
+     * A persistent preview unit: one top-level window plus its dialog family,
+     * with a single animated slot the whole family is transformed onto. Views
+     * survive relayouts so the slot can ease from the old arrangement to the new
+     * one instead of snapping.
+     */
     struct view_data
     {
-        std::shared_ptr<wf::scene::view_2d_transformer_t> tr;
         wf::point_t    cell{0, 0};
-        wf::geometry_t expose{};
         wf::geometry_t screen{};
+        bool           dragging = false;
+        std::unique_ptr<wf::geometry_animation_t> slot;
+        std::map<wayfire_toplevel_view, transformer_t> family;
     };
 
-    std::shared_ptr<wf::scene::view_2d_transformer_t> ensure_transformer(
-        wayfire_toplevel_view view);
+    transformer_t ensure_transformer(wayfire_toplevel_view view);
+    void detach_family(view_data& d);
+    void reconcile_family(wayfire_toplevel_view parent, view_data& d);
+    void aim_slot(wayfire_toplevel_view view, wf::point_t cell, wf::geometry_t target);
+
     void ensure_backdrop();
     void remove_backdrop();
-    void clear_windows();
     void layout(const frame_ctx& ctx, const std::vector<std::string>& filter);
     void layout_cell(wf::point_t cell, std::vector<wayfire_toplevel_view>& cell_views,
         wf::geometry_t area);
     void place(const frame_ctx& ctx, const render_state& state);
 
     wf::output_t *output;
+    wf::option_wrapper_t<wf::animation_description_t> anim_dur{"spatial/duration"};
     std::map<wayfire_toplevel_view, view_data> views;
     std::vector<wayfire_toplevel_view> hidden_views;
     std::vector<wayfire_toplevel_view> shown_minimized;
