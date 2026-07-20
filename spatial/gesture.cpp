@@ -24,18 +24,16 @@ struct swipe_gesture_t::impl
     int    pinch_fingers = 0;
     double pinch_scale   = 1.0;
 
-    void velocity(double& vx, double& vy) const
+    wf::pointf_t velocity() const
     {
-        vx = vy = 0;
-        if (history.size() < 2) { return; }
+        if (history.size() < 2) { return {0, 0}; }
 
         const uint32_t period = history.back().time - history.front().time;
-        if (period == 0) { return; }
+        if (period == 0) { return {0, 0}; }
 
         double sx = 0, sy = 0;
         for (size_t i = 1; i < history.size(); i++) { sx += history[i].dx; sy += history[i].dy; }
-        vx = sx / period;
-        vy = sy / period;
+        return {sx / period, sy / period};
     }
 
     wf::signal::connection_t<event<wlr_pointer_swipe_begin_event>> begin_cb =
@@ -61,9 +59,8 @@ struct swipe_gesture_t::impl
     wf::signal::connection_t<event<wlr_pointer_swipe_end_event>> end_cb =
         [this] (event<wlr_pointer_swipe_end_event> *)
     {
-        double vx, vy;
-        velocity(vx, vy);
-        if (owner.on_end) { owner.on_end(vx, vy); }
+        const auto v = velocity();
+        if (owner.on_end) { owner.on_end(v.x, v.y); }
     };
 
     wf::signal::connection_t<event<wlr_pointer_pinch_begin_event>> pinch_begin_cb =

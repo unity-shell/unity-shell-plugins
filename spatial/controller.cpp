@@ -23,16 +23,6 @@ bool controller::inhibited() { return s_inhibit > 0; }
 void controller::inhibit() { s_inhibit++; }
 void controller::uninhibit() { if (s_inhibit > 0) { s_inhibit--; } }
 
-mode *controller::mode_ptr(mode_id m)
-{
-    switch (m)
-    {
-      case mode_id::apps_spread:       return &m_apps;
-      case mode_id::workspaces_spread: return &m_workspaces;
-      default:                         return &m_desktop;
-    }
-}
-
 void controller::init()
 {
     spread = std::make_unique<spread_t>(output);
@@ -68,6 +58,8 @@ void controller::init()
     wf::get_core().connect(&on_view_unmapped);
     wf::get_core().connect(&on_focus_request);
     output->connect(&on_view_mapped);
+    output->connect(&on_workarea_changed);
+    output->connect(&on_view_geometry_changed);
 
     swipe.on_begin  = [this] (int f) { gesture_begin(f); };
     swipe.on_update = [this] (double dx, double dy) { gesture_update(dx, dy); };
@@ -81,11 +73,13 @@ void controller::fini()
     on_view_unmapped.disconnect();
     on_view_mapped.disconnect();
     on_focus_request.disconnect();
+    on_workarea_changed.disconnect();
+    on_view_geometry_changed.disconnect();
 }
 
 void controller::apply_resources()
 {
-    auto w = current().want();
+    auto w = resources_for(cur);
     t_activate->ensure(w.activated);
     t_top->ensure(w.top);
     t_grab->ensure(w.grabbed);
@@ -95,8 +89,8 @@ void controller::apply_resources()
 
 void controller::publish_mode()
 {
-    const bool a = (cur == mode_id::apps_spread);
-    const bool w = (cur == mode_id::workspaces_spread);
+    const bool a = (cur == stage::apps_spread);
+    const bool w = (cur == stage::workspaces_spread);
     if (a != pub_apps)
     {
         a ? output->activate_plugin(&state_apps) : output->deactivate_plugin(&state_apps);
@@ -112,7 +106,7 @@ void controller::publish_mode()
 
 void controller::reconcile()
 {
-    mode_id want = current().classify(g_axis.value());
+    stage want = stage_at(g_axis.value(), cur);
     if (want != cur)
     {
         cur = want;
@@ -167,10 +161,10 @@ void controller::unhook()   { t_hooks->ensure(false); }
 void controller::settle_to(double target)
 {
     /* Enter the spread up front when opening from the desktop, so there is a
-     * live overview to animate into (reconcile re-drives the mode as g rises). */
-    if ((cur == mode_id::desktop) && (target > 0.0))
+     * live spread to animate into (reconcile re-drives the mode as g rises). */
+    if ((cur == stage::desktop) && (target > 0.0))
     {
-        cur = mode_id::apps_spread;
+        cur = stage::apps_spread;
         publish_mode();
         apply_resources();
     }
@@ -182,6 +176,21 @@ void controller::settle_to(double target)
     if (target > start) { start = std::min(target, start + 1e-3); }
     g_axis.animate_to(start, target);
     set_hook();
+}
+
+void controller::relayout_if_idle()
+{
+    /* Reflow when a window resizes or the workarea changes while the spread sits
+     * settled. Skip while a gesture, slide, stage animation, our own window
+     * activation, or a thumbnail drag is driving geometry, so we never fight
+     * motion that is already in flight. */
+    if ((cur == stage::desktop) || gesturing || slide_active || self_activating ||
+        g_axis.active() || (drag && drag->active()))
+    {
+        return;
+    }
+
+    relayout();
 }
 
 void controller::relayout()
@@ -216,7 +225,7 @@ void controller::end_to_desktop()
     if (drag) { drag->cancel(); }
     filter.clear();
     g_axis.pin(0.0);
-    cur = mode_id::desktop;
+    cur = stage::desktop;
     publish_mode();
     apply_resources();
     unhook();
@@ -234,19 +243,19 @@ void controller::recenter_apps_spread()
     slide_active = false;
     relayout();
     g_axis.pin(1.0);
-    cur = mode_id::apps_spread;
+    cur = stage::apps_spread;
     set_hook();
 }
 
-void controller::close_overview()
+void controller::close_spread()
 {
-    if (cur != mode_id::desktop) { settle_to(0.0); }
+    if (cur != stage::desktop) { settle_to(0.0); }
 }
 
 void controller::toggle_apps_spread()
 {
     if (inhibited()) { return; }
-    if (cur == mode_id::apps_spread) { settle_to(0.0); return; }
+    if (cur == stage::apps_spread) { settle_to(0.0); return; }
     filter.clear();
     settle_to(1.0);
 }
@@ -254,17 +263,17 @@ void controller::toggle_apps_spread()
 void controller::toggle_workspaces_spread()
 {
     if (inhibited()) { return; }
-    if (cur == mode_id::workspaces_spread) { settle_to(0.0); return; }
+    if (cur == stage::workspaces_spread) { settle_to(0.0); return; }
     settle_to(2.0);
 }
 
 void controller::spread_app(const std::vector<std::string>& ids)
 {
-    if (inhibited() || ids.empty() || (cur == mode_id::workspaces_spread)) { return; }
-    if ((cur == mode_id::apps_spread) && (filter == ids)) { settle_to(0.0); return; }
+    if (inhibited() || ids.empty() || (cur == stage::workspaces_spread)) { return; }
+    if ((cur == stage::apps_spread) && (filter == ids)) { settle_to(0.0); return; }
 
     filter = ids;
-    if (cur == mode_id::desktop) { settle_to(1.0); }
+    if (cur == stage::desktop) { settle_to(1.0); }
     else { relayout(); }
 }
 
@@ -331,9 +340,9 @@ void controller::finish_slide()
     const bool commit = (pan.value() > 0.5) && !same_ws(slide_to, slide_from);
     slide_active = false;
     if (commit) { output->wset()->set_workspace(slide_to); }
-    /* The mode that started the slide cleans up (desktop tears down, spread
-     * re-centres). cur is unchanged across a slide, so current() is that mode. */
-    current().slide_settle(*this);
+    /* The stage that started the slide cleans up (desktop tears down, apps
+     * spread re-centres); cur is unchanged across a slide. */
+    stage_slide_settle();
 }
 
 void controller::gesture_begin(int fingers)
@@ -343,32 +352,32 @@ void controller::gesture_begin(int fingers)
 
     if (fingers == 4)
     {
-        if (current().slides()) { begin_slide(); }
+        if (stage_slides(cur)) { begin_slide(); }
         return;
     }
 
     if (fingers != 3) { return; }
 
-    /* Bound the swipe to one stage either side of the current MODE (a discrete
+    /* Bound the swipe to one stage either side of the current stage (a discrete
      * anchor), not the live g, so a single swipe cannot skip desktop -> wall. */
-    const double stage = (cur == mode_id::workspaces_spread) ? 2.0
-        : (cur == mode_id::desktop) ? 0.0 : 1.0;
+    const double anchor = (cur == stage::workspaces_spread) ? 2.0
+        : (cur == stage::desktop) ? 0.0 : 1.0;
     const double from = g_axis.value();
 
     /* Lay the spread out up front so the first motion frame does not hitch. A
-     * fresh swipe from the desktop is an unfiltered overview: drop any app-id
+     * fresh swipe from the desktop is an unfiltered apps spread: drop any app-id
      * filter left over from an earlier spread-app (as toggle_apps_spread does),
      * otherwise the swipe would only show that one app. */
-    if (cur == mode_id::desktop)
+    if (cur == stage::desktop)
     {
         filter.clear();
-        cur = mode_id::apps_spread;
+        cur = stage::apps_spread;
         publish_mode();
         apply_resources();
     }
 
-    gp_lo = std::max(0.0, stage - 1.0);
-    gp_hi = std::min(2.0, stage + 1.0);
+    gp_lo = std::max(0.0, anchor - 1.0);
+    gp_hi = std::min(2.0, anchor + 1.0);
     g_axis.begin(from, gp_lo, gp_hi);
     gesturing = true;
     set_hook();
@@ -381,10 +390,10 @@ void controller::gesture_update(double dx, double dy)
 
     g_axis.drive(-dy / SWIPE_DISTANCE);
 
-    /* Follow the mode across the spread <-> wall boundary while dragging, but
+    /* Follow the stage across the spread <-> wall boundary while dragging, but
      * never drop to desktop mid-gesture (that teardown would drop the grab). */
-    mode_id want = current().classify(g_axis.value());
-    if ((want != cur) && (want != mode_id::desktop))
+    stage want = stage_at(g_axis.value(), cur);
+    if ((want != cur) && (want != stage::desktop))
     {
         cur = want;
         publish_mode();
@@ -409,28 +418,71 @@ void controller::gesture_pinch(int fingers, double scale)
     if (std::abs(scale - 1.0) >= PINCH_THRESHOLD) { toggle_workspaces_spread(); }
 }
 
+void controller::stage_on_button(const wlr_pointer_button_event& ev)
+{
+    if (ev.state != WL_POINTER_BUTTON_STATE_PRESSED)
+    {
+        /* The wall commits a thumbnail drag, or picks the clicked workspace. */
+        if ((cur == stage::workspaces_spread) &&
+            (drag->release() == window_drag_t::result::empty_click))
+        {
+            auto ctx = make_frame_ctx(output);
+            output->wset()->set_workspace(coords::cell_at(ctx, ctx.cursor, WALL_GAP));
+            settle_to(0.0);
+        }
+
+        return;
+    }
+
+    if (cur == stage::apps_spread)
+    {
+        auto ctx = make_frame_ctx(output);
+        if (auto v = spread->view_at(ctx.cursor)) { activate_window(v, ctx.cur_ws); }
+        else { close_spread(); }   /* a click on empty space dismisses the spread */
+    } else if (cur == stage::workspaces_spread)
+    {
+        drag->press();
+    }
+}
+
+void controller::stage_on_motion()
+{
+    if (cur != stage::workspaces_spread) { return; }
+
+    drag->motion();
+    auto ctx = make_frame_ctx(output);
+    rs.hover = coords::cell_at(ctx, ctx.cursor, WALL_GAP);
+}
+
+void controller::stage_slide_settle()
+{
+    if (cur == stage::desktop) { end_to_desktop(); }
+    else if (cur == stage::apps_spread) { recenter_apps_spread(); }
+    /* the wall does not re-centre after a slide */
+}
+
 void controller::handle_pointer_button(const wlr_pointer_button_event& ev)
 {
     if (ev.button != BTN_LEFT) { return; }
-    current().on_button(*this, ev);
+    stage_on_button(ev);
     update_cursor();
 }
 
 void controller::handle_pointer_motion(wf::pointf_t, uint32_t)
 {
-    current().on_motion(*this);
+    stage_on_motion();
     update_cursor();
     output->render->schedule_redraw();
 }
 
 void controller::handle_keyboard_key(wf::seat_t*, wlr_keyboard_key_event ev)
 {
-    if ((ev.state != WL_KEYBOARD_KEY_STATE_PRESSED) || (cur == mode_id::desktop)) { return; }
+    if ((ev.state != WL_KEYBOARD_KEY_STATE_PRESSED) || (cur == stage::desktop)) { return; }
 
     if (ev.keycode == KEY_ESC) { settle_to(0.0); return; }
 
     /* The grab owns the keyboard, so the compositor's workspace-switch binds
-     * can't reach it; arrow keys move to the neighbour and stay in the overview
+     * can't reach it; arrow keys move to the neighbour and stay in the spread
      * (the backdrop is kept across the relayout, so the desktop never blinks). */
     auto cur_ws = output->wset()->get_current_workspace();
     auto dims   = output->wset()->get_workspace_grid_size();
@@ -471,14 +523,14 @@ void controller::run_next_frame(std::function<void ()> fn)
 
 void controller::handle_mapped(wf::view_mapped_signal *ev)
 {
-    if ((cur == mode_id::desktop) && !slide_active) { return; }
+    if ((cur == stage::desktop) && !slide_active) { return; }
     if (!wf::toplevel_cast(ev->view)) { return; }
     if (!gesturing && !slide_active && !g_axis.animating()) { relayout(); }
 }
 
 void controller::handle_unmapped(wf::view_unmapped_signal *ev)
 {
-    if ((cur == mode_id::desktop) && !slide_active) { return; }
+    if ((cur == stage::desktop) && !slide_active) { return; }
     auto v = wf::toplevel_cast(ev->view);
     if (!v) { return; }
 
@@ -490,13 +542,13 @@ void controller::handle_unmapped(wf::view_unmapped_signal *ev)
 void controller::handle_focus_request(wf::view_focus_request_signal *ev)
 {
     /* An app was activated from outside the spread (e.g. the launcher): close
-     * the overview so the activation is revealed, like gnome-shell's overview.
-     * Our own window selection is guarded by self_activating. */
-    if (self_activating || (cur == mode_id::desktop)) { return; }
+     * the spread so the activation is revealed. Our own window selection is
+     * guarded by self_activating. */
+    if (self_activating || (cur == stage::desktop)) { return; }
 
     auto v = wf::toplevel_cast(ev->view);
     if (!v || (v->get_output() != output)) { return; }
 
-    close_overview();
+    close_spread();
 }
 }

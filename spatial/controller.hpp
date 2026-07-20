@@ -19,14 +19,14 @@
 #include "tracker.hpp"
 #include "resources.hpp"
 #include "renderer.hpp"
-#include "mode.hpp"
+#include "stage.hpp"
 #include "gesture.hpp"
 #include "drag.hpp"
 
 namespace spatial
 {
 /**
- * Per-output overview controller (the State-pattern context).
+ * Per-output spread controller (the State-pattern context).
  *
  * One continuous axis g in [0, 2] is the single source of truth: g==0 desktop,
  * g in (0, 1] the apps spread, g in (1, 2] the workspaces wall. A gesture drives
@@ -43,36 +43,32 @@ class controller : public wf::per_output_plugin_instance_t,
     void init() override;
     void fini() override;
 
-    void gesture_begin(int fingers);
-    void gesture_update(double dx, double dy);
-    void gesture_end(double vx, double vy);
-    void gesture_pinch(int fingers, double scale);
-
     void toggle_apps_spread();
     void toggle_workspaces_spread();
-    void close_overview();
+    void close_spread();
     void spread_app(const std::vector<std::string>& ids);
-
-    wf::output_t *out() const { return output; }
-    spread_t& renderer() { return *spread; }
-    window_drag_t& dragger() { return *drag; }
-    frame_ctx frame() const { return make_frame_ctx(output); }
-    render_state& rstate() { return rs; }
-    void settle_to(double target);
-    void relayout();
-    void activate_window(wayfire_toplevel_view view, wf::point_t ws);
-    void end_to_desktop();
-    void recenter_apps_spread();
 
     static bool inhibited();
     static void inhibit();
     static void uninhibit();
 
   private:
-    using mode_t = mode_id;
+    void gesture_begin(int fingers);
+    void gesture_update(double dx, double dy);
+    void gesture_end(double vx, double vy);
+    void gesture_pinch(int fingers, double scale);
 
-    mode& current() { return *mode_ptr(cur); }
-    mode *mode_ptr(mode_id m);
+    void settle_to(double target);
+    void relayout();
+    void activate_window(wayfire_toplevel_view view, wf::point_t ws);
+    void end_to_desktop();
+    void recenter_apps_spread();
+
+    /* Per-stage input behaviour: click and pointer-motion semantics differ by
+     * stage, everything else is shared (see stage.hpp). */
+    void stage_on_button(const wlr_pointer_button_event& ev);
+    void stage_on_motion();
+    void stage_slide_settle();
 
     void reconcile();
     void apply_resources();
@@ -98,6 +94,7 @@ class controller : public wf::per_output_plugin_instance_t,
     void handle_mapped(wf::view_mapped_signal *ev);
     void handle_unmapped(wf::view_unmapped_signal *ev);
     void handle_focus_request(wf::view_focus_request_signal *ev);
+    void relayout_if_idle();
     bool cursor_here() const;
 
     std::unique_ptr<spread_t> spread;
@@ -109,10 +106,7 @@ class controller : public wf::per_output_plugin_instance_t,
     tracker pan{"spatial/duration"};
     render_state rs;
 
-    mode_id cur = mode_id::desktop;
-    desktop_mode            m_desktop;
-    apps_spread_mode        m_apps;
-    workspaces_spread_mode  m_workspaces;
+    stage cur = stage::desktop;
 
     std::optional<toggled> t_activate, t_top, t_grab, t_hooks;
 
@@ -154,5 +148,9 @@ class controller : public wf::per_output_plugin_instance_t,
         [this] (wf::view_mapped_signal *ev) { handle_mapped(ev); };
     wf::signal::connection_t<wf::view_focus_request_signal> on_focus_request =
         [this] (wf::view_focus_request_signal *ev) { handle_focus_request(ev); };
+    wf::signal::connection_t<wf::workarea_changed_signal> on_workarea_changed =
+        [this] (wf::workarea_changed_signal *) { relayout_if_idle(); };
+    wf::signal::connection_t<wf::view_geometry_changed_signal> on_view_geometry_changed =
+        [this] (wf::view_geometry_changed_signal *) { relayout_if_idle(); };
 };
 }
