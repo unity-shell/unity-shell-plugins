@@ -255,17 +255,18 @@ void spread_t::ensure_layout(const frame_ctx& ctx, const std::vector<std::string
     ensure_backdrop();
     if ((ctx.cur_ws.x != laid_out_ws.x) || (ctx.cur_ws.y != laid_out_ws.y))
     {
-        layout(ctx, filter);
+        layout(ctx, filter, true);
     }
 }
 
-void spread_t::relayout(const frame_ctx& ctx, const std::vector<std::string>& filter)
+void spread_t::relayout(const frame_ctx& ctx, const std::vector<std::string>& filter, bool animate)
 {
-    layout(ctx, filter);
+    layout(ctx, filter, animate);
 }
 
-void spread_t::layout(const frame_ctx& ctx, const std::vector<std::string>& filter)
+void spread_t::layout(const frame_ctx& ctx, const std::vector<std::string>& filter, bool animate)
 {
+    slot_animate = animate;
     ensure_backdrop();
     laid_out_ws = ctx.cur_ws;
 
@@ -286,16 +287,11 @@ void spread_t::layout(const frame_ctx& ctx, const std::vector<std::string>& filt
             continue;
         }
 
-        /* Minimized views stay mapped but have their node disabled; enable it
-         * once for the lifetime of the spread (restored in clear()). The enabled
-         * state is a shared counter Wayfire also drives for workspace visibility,
-         * so toggling it per relayout would drift and strand views hidden. */
-        if (v->minimized &&
-            std::find(shown_minimized.begin(), shown_minimized.end(), v) == shown_minimized.end())
-        {
-            wf::scene::set_node_enabled(v->get_root_node(), true);
-            shown_minimized.push_back(v);
-        }
+        /* Minimized views stay mapped but have their node disabled; surface it
+         * once for the lifetime of the spread (override_node is idempotent and
+         * restores in clear()). The enabled state is a shared counter Wayfire
+         * also drives, so toggling per relayout would drift and strand views. */
+        if (v->minimized) { override_node(v, true); }
 
         /* Bucket by Wayfire's own (grid-clamped) view->workspace mapping, not a
          * raw floor of the geometry centre which can land in a phantom cell. */
@@ -304,23 +300,20 @@ void spread_t::layout(const frame_ctx& ctx, const std::vector<std::string>& filt
         wanted.insert(v);
     }
 
-    /* Reconcile the filter's hidden set idempotently (enable un-hidden views,
-     * disable newly hidden ones), so node-enable never drifts across relayouts. */
-    for (auto& v : hidden_views)
+    /* Reconcile the filter's hidden set idempotently: un-hide views we hid that
+     * are no longer filtered, then hide the newly filtered ones. Surfaced
+     * minimized overrides (restore == false) are left for teardown. */
+    for (auto it = node_overrides.begin(); it != node_overrides.end(); )
     {
-        if (std::find(want_hidden.begin(), want_hidden.end(), v) == want_hidden.end())
+        const bool we_hid = it->second;   /* hidden views restore to enabled */
+        const bool still  = std::find(want_hidden.begin(), want_hidden.end(), it->first) != want_hidden.end();
+        if (we_hid && !still)
         {
-            wf::scene::set_node_enabled(v->get_root_node(), true);
-        }
+            wf::scene::set_node_enabled(it->first->get_root_node(), it->second);
+            it = node_overrides.erase(it);
+        } else { ++it; }
     }
-    for (auto& v : want_hidden)
-    {
-        if (std::find(hidden_views.begin(), hidden_views.end(), v) == hidden_views.end())
-        {
-            wf::scene::set_node_enabled(v->get_root_node(), false);
-        }
-    }
-    hidden_views = std::move(want_hidden);
+    for (auto& v : want_hidden) { override_node(v, false); }
 
     /* Drop previews for views that are no longer shown. */
     for (auto it = views.begin(); it != views.end(); )
@@ -564,7 +557,9 @@ void spread_t::aim_slot(wayfire_toplevel_view view, wf::point_t cell, wf::geomet
         d.slot->set_start(target);
     } else
     {
-        d.slot->set_start(*d.slot);
+        /* Ease from the current position, or snap when the layout only shifted
+         * in workspace-relative coordinates (slot_animate == false). */
+        d.slot->set_start(slot_animate ? (wf::geometry_t) *d.slot : target);
     }
 
     d.slot->set_end(target);
@@ -603,17 +598,32 @@ void spread_t::reconcile_family(wayfire_toplevel_view parent, view_data& d)
     }
 }
 
+void spread_t::override_node(wayfire_toplevel_view view, bool on)
+{
+    if (node_overrides.count(view)) { return; }   /* once per spread */
+    wf::scene::set_node_enabled(view->get_root_node(), on);
+    node_overrides[view] = !on;                    /* restore is the balanced inverse */
+}
+
+void spread_t::restore_node(wayfire_toplevel_view view)
+{
+    auto it = node_overrides.find(view);
+    if (it == node_overrides.end()) { return; }
+    wf::scene::set_node_enabled(view->get_root_node(), it->second);
+    node_overrides.erase(it);
+}
+
 void spread_t::clear()
 {
     for (auto& [view, d] : views) { detach_family(d); }
     views.clear();
 
-    for (auto& v : hidden_views) { wf::scene::set_node_enabled(v->get_root_node(), true); }
-    hidden_views.clear();
-
-    /* Restore the minimized views we made visible, once, when the spread ends. */
-    for (auto& v : shown_minimized) { wf::scene::set_node_enabled(v->get_root_node(), false); }
-    shown_minimized.clear();
+    /* Restore every node we forced, once, when the spread ends. */
+    for (auto& [view, restore] : node_overrides)
+    {
+        wf::scene::set_node_enabled(view->get_root_node(), restore);
+    }
+    node_overrides.clear();
 
     remove_backdrop();
     laid_out_ws = {-1, -1};
@@ -641,19 +651,7 @@ void spread_t::forget(wayfire_toplevel_view view)
         }
     }
 
-    if (auto h = std::find(hidden_views.begin(), hidden_views.end(), view);
-        h != hidden_views.end())
-    {
-        wf::scene::set_node_enabled(view->get_root_node(), true);
-        hidden_views.erase(h);
-    }
-
-    if (auto m = std::find(shown_minimized.begin(), shown_minimized.end(), view);
-        m != shown_minimized.end())
-    {
-        wf::scene::set_node_enabled(view->get_root_node(), false);
-        shown_minimized.erase(m);
-    }
+    restore_node(view);
 }
 
 void spread_t::release_for_drag(wayfire_toplevel_view view)

@@ -17,6 +17,17 @@
 
 namespace spatial
 {
+namespace
+{
+/* Sets a flag for the duration of a scope (exception-safe, always cleared). */
+struct scoped_flag
+{
+    bool& flag;
+    explicit scoped_flag(bool& f) : flag(f) { flag = true; }
+    ~scoped_flag() { flag = false; }
+};
+}
+
 /* Cross-output inhibit reference count used by IPC hooks. */
 static int s_inhibit = 0;
 bool controller::inhibited() { return s_inhibit > 0; }
@@ -30,6 +41,7 @@ void controller::init()
         [this] (wayfire_toplevel_view v, wf::point_t ws) { activate_window(v, ws); },
         [this] { relayout(); });
     grab = std::make_unique<wf::input_grab_t>(PLUGIN_NAME, output, this, this, nullptr);
+    slide = std::make_unique<slide_t>(output);
 
     t_activate.emplace(
         [this] { output->activate_plugin(&grab_interface); },
@@ -59,7 +71,6 @@ void controller::init()
     wf::get_core().connect(&on_focus_request);
     output->connect(&on_view_mapped);
     output->connect(&on_workarea_changed);
-    output->connect(&on_view_geometry_changed);
 
     swipe.on_begin  = [this] (int f) { gesture_begin(f); };
     swipe.on_update = [this] (double dx, double dy) { gesture_update(dx, dy); };
@@ -74,7 +85,6 @@ void controller::fini()
     on_view_mapped.disconnect();
     on_focus_request.disconnect();
     on_workarea_changed.disconnect();
-    on_view_geometry_changed.disconnect();
 }
 
 void controller::apply_resources()
@@ -109,6 +119,10 @@ void controller::reconcile()
     stage want = stage_at(g_axis.value(), cur);
     if (want != cur)
     {
+        /* Filter is owned by the desktop boundary: it clears whenever we land
+         * back on the desktop, so every fresh spread opens unfiltered and only
+         * spread_app ever sets it. */
+        if (want == stage::desktop) { filter.clear(); }
         cur = want;
         publish_mode();
     }
@@ -120,10 +134,10 @@ void controller::render_frame()
 {
     auto ctx = make_frame_ctx(output);
     rs.g = g_axis.value();
-    if (slide_active)
+    if (slide->active())
     {
-        rs.pan_dir    = {slide_to.x - slide_from.x, slide_to.y - slide_from.y};
-        rs.pan_amount = pan.value();
+        rs.pan_dir    = slide->pan_dir();
+        rs.pan_amount = slide->pan_amount();
     } else
     {
         rs.pan_dir    = {0, 0};
@@ -135,9 +149,9 @@ void controller::render_frame()
 
 void controller::advance()
 {
-    if (slide_active)
+    if (slide->active())
     {
-        if (pan.active()) { output->render->schedule_redraw(); return; }
+        if (slide->advancing()) { output->render->schedule_redraw(); return; }
         finish_slide();
         return;
     }
@@ -184,7 +198,7 @@ void controller::relayout_if_idle()
      * settled. Skip while a gesture, slide, stage animation, our own window
      * activation, or a thumbnail drag is driving geometry, so we never fight
      * motion that is already in flight. */
-    if ((cur == stage::desktop) || gesturing || slide_active || self_activating ||
+    if ((cur == stage::desktop) || gesturing || slide->active() || self_activating ||
         g_axis.active() || (drag && drag->active()))
     {
         return;
@@ -199,7 +213,7 @@ void controller::relayout()
 
     /* The slots ease toward their new targets on their own; keep the frame loop
      * running so that easing is drawn when the spread is otherwise settled. */
-    if (!g_axis.active() && !slide_active && spread->animating()) { set_hook(); }
+    if (!g_axis.active() && !slide->active() && spread->animating()) { set_hook(); }
 
     render_frame();
     output->render->schedule_redraw();
@@ -207,20 +221,18 @@ void controller::relayout()
 
 void controller::activate_window(wayfire_toplevel_view v, wf::point_t ws)
 {
-    /* Our own focus_request would otherwise trip the external-activation
-     * dismissal below; settle_to(0.0) already closes the spread here. */
-    self_activating = true;
+    /* Suppress the external-activation dismissal for our own focus_request and
+     * workspace switch; settle_to(0.0) already closes the spread here. */
+    scoped_flag guard{self_activating};
     if (v->minimized) { wf::get_core().default_wm->minimize_request(v, false); }
     wf::get_core().default_wm->focus_request(v);
-    self_activating = false;
-
     output->wset()->set_workspace(ws);
     settle_to(0.0);
 }
 
 void controller::end_to_desktop()
 {
-    slide_active = false;
+    if (slide) { slide->cancel(); }
     gesturing = false;
     if (drag) { drag->cancel(); }
     filter.clear();
@@ -240,8 +252,14 @@ void controller::end_to_desktop()
 
 void controller::recenter_apps_spread()
 {
-    slide_active = false;
-    relayout();
+    slide->cancel();
+    /* Recompute for the new current workspace but snap: the pan already moved
+     * everything into place, so animating the (now workspace-relative) slots
+     * would just re-ease to visually identical targets -- the "weird" second
+     * animation after a slide commit. */
+    spread->relayout(make_frame_ctx(output), filter, /*animate=*/false);
+    render_frame();
+    output->render->schedule_redraw();
     g_axis.pin(1.0);
     cur = stage::apps_spread;
     set_hook();
@@ -282,64 +300,35 @@ bool controller::cursor_here() const
     return output->get_relative_geometry() & output->get_cursor_position();
 }
 
-wf::point_t controller::neighbor(wf::point_t cur_ws, double dx, double dy) const
-{
-    auto dims = output->wset()->get_workspace_grid_size();
-    wf::point_t nb = cur_ws;
-    if (std::abs(dx) > std::abs(dy))
-    {
-        if ((dx < 0) && (cur_ws.x < dims.width - 1)) { nb.x = cur_ws.x + 1; }
-        else if ((dx > 0) && (cur_ws.x > 0)) { nb.x = cur_ws.x - 1; }
-    } else
-    {
-        if ((dy < 0) && (cur_ws.y < dims.height - 1)) { nb.y = cur_ws.y + 1; }
-        else if ((dy > 0) && (cur_ws.y > 0)) { nb.y = cur_ws.y - 1; }
-    }
-
-    return nb;
-}
-
 void controller::begin_slide()
 {
-    slide_from = output->wset()->get_current_workspace();
-    slide_to = slide_from;
-    slide_accum_x = slide_accum_y = 0;
-    pan.begin(0.0, 0.0, 1.0);
-
+    /* A slide shows the spread even from the desktop, so force the resources on
+     * (the desktop stage would otherwise hold none) before handing off to the
+     * pan tracker. */
     t_activate->ensure(true);
     t_top->ensure(true);
     t_grab->ensure(true);
     spread->ensure_layout(make_frame_ctx(output), filter);
 
-    slide_active = true;
+    slide->begin();
     set_hook();
 }
 
 void controller::slide_update(double dx, double dy)
 {
-    slide_accum_x += dx;
-    slide_accum_y += dy;
-    slide_to = neighbor(slide_from, slide_accum_x, slide_accum_y);
-
-    const bool horiz = std::abs(slide_accum_x) > std::abs(slide_accum_y);
-    const double mag = horiz ? std::abs(slide_accum_x) : std::abs(slide_accum_y);
-    pan.hold(same_ws(slide_to, slide_from) ? 0.0 : std::clamp(mag / SWIPE_DISTANCE, 0.0, 1.0));
-
+    slide->update(dx, dy);
     output->render->schedule_redraw();
 }
 
 void controller::slide_end()
 {
-    const bool commit = (pan.value() > 0.5) && !same_ws(slide_to, slide_from);
-    pan.animate_to(pan.value(), commit ? 1.0 : 0.0);
+    slide->release();
     set_hook();
 }
 
 void controller::finish_slide()
 {
-    const bool commit = (pan.value() > 0.5) && !same_ws(slide_to, slide_from);
-    slide_active = false;
-    if (commit) { output->wset()->set_workspace(slide_to); }
+    if (auto ws = slide->finish()) { output->wset()->set_workspace(*ws); }
     /* The stage that started the slide cleans up (desktop tears down, apps
      * spread re-centres); cur is unchanged across a slide. */
     stage_slide_settle();
@@ -364,13 +353,11 @@ void controller::gesture_begin(int fingers)
         : (cur == stage::desktop) ? 0.0 : 1.0;
     const double from = g_axis.value();
 
-    /* Lay the spread out up front so the first motion frame does not hitch. A
-     * fresh swipe from the desktop is an unfiltered apps spread: drop any app-id
-     * filter left over from an earlier spread-app (as toggle_apps_spread does),
-     * otherwise the swipe would only show that one app. */
+    /* Lay the spread out up front so the first motion frame does not hitch.
+     * Filter is already empty here (it clears on the desktop boundary), so the
+     * swipe opens an unfiltered spread. */
     if (cur == stage::desktop)
     {
-        filter.clear();
         cur = stage::apps_spread;
         publish_mode();
         apply_resources();
@@ -385,7 +372,7 @@ void controller::gesture_begin(int fingers)
 
 void controller::gesture_update(double dx, double dy)
 {
-    if (slide_active) { slide_update(dx, dy); return; }
+    if (slide->active()) { slide_update(dx, dy); return; }
     if (!gesturing) { return; }
 
     g_axis.drive(-dy / SWIPE_DISTANCE);
@@ -404,7 +391,7 @@ void controller::gesture_update(double dx, double dy)
 
 void controller::gesture_end(double, double vy)
 {
-    if (slide_active) { slide_end(); return; }
+    if (slide->active()) { slide_end(); return; }
     if (!gesturing) { return; }
 
     gesturing = false;
@@ -523,20 +510,20 @@ void controller::run_next_frame(std::function<void ()> fn)
 
 void controller::handle_mapped(wf::view_mapped_signal *ev)
 {
-    if ((cur == stage::desktop) && !slide_active) { return; }
+    if ((cur == stage::desktop) && !slide->active()) { return; }
     if (!wf::toplevel_cast(ev->view)) { return; }
-    if (!gesturing && !slide_active && !g_axis.animating()) { relayout(); }
+    if (!gesturing && !slide->active() && !g_axis.animating()) { relayout(); }
 }
 
 void controller::handle_unmapped(wf::view_unmapped_signal *ev)
 {
-    if ((cur == stage::desktop) && !slide_active) { return; }
+    if ((cur == stage::desktop) && !slide->active()) { return; }
     auto v = wf::toplevel_cast(ev->view);
     if (!v) { return; }
 
     drag->forget(v);
     spread->forget(v);
-    if (!gesturing && !slide_active && !g_axis.animating()) { relayout(); }
+    if (!gesturing && !slide->active() && !g_axis.animating()) { relayout(); }
 }
 
 void controller::handle_focus_request(wf::view_focus_request_signal *ev)

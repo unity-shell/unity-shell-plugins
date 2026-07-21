@@ -20,6 +20,7 @@
 #include "resources.hpp"
 #include "renderer.hpp"
 #include "stage.hpp"
+#include "slide.hpp"
 #include "gesture.hpp"
 #include "drag.hpp"
 
@@ -82,7 +83,6 @@ class controller : public wf::per_output_plugin_instance_t,
     void slide_update(double dx, double dy);
     void slide_end();
     void finish_slide();
-    wf::point_t neighbor(wf::point_t cur, double dx, double dy) const;
     static bool same_ws(wf::point_t a, wf::point_t b) { return a.x == b.x && a.y == b.y; }
 
     void handle_pointer_button(const wlr_pointer_button_event& ev) override;
@@ -100,10 +100,10 @@ class controller : public wf::per_output_plugin_instance_t,
     std::unique_ptr<spread_t> spread;
     std::unique_ptr<window_drag_t> drag;
     std::unique_ptr<wf::input_grab_t> grab;
+    std::unique_ptr<slide_t> slide;
     swipe_gesture_t swipe;
 
     tracker g_axis{"spatial/duration"};
-    tracker pan{"spatial/duration"};
     render_state rs;
 
     stage cur = stage::desktop;
@@ -114,10 +114,6 @@ class controller : public wf::per_output_plugin_instance_t,
     bool   gesturing = false;
     bool   self_activating = false;
     double gp_lo = 0, gp_hi = 2;
-
-    bool slide_active = false;
-    wf::point_t slide_from{0, 0}, slide_to{0, 0};
-    double slide_accum_x = 0, slide_accum_y = 0;
 
     wf::effect_hook_t pre_hook  = [this] { render_frame(); };
     wf::effect_hook_t post_hook = [this] { advance(); };
@@ -150,7 +146,5 @@ class controller : public wf::per_output_plugin_instance_t,
         [this] (wf::view_focus_request_signal *ev) { handle_focus_request(ev); };
     wf::signal::connection_t<wf::workarea_changed_signal> on_workarea_changed =
         [this] (wf::workarea_changed_signal *) { relayout_if_idle(); };
-    wf::signal::connection_t<wf::view_geometry_changed_signal> on_view_geometry_changed =
-        [this] (wf::view_geometry_changed_signal *) { relayout_if_idle(); };
 };
 }
