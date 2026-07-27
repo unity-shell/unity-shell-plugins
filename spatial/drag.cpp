@@ -53,14 +53,14 @@ struct window_drag_t::impl
         auto thumb = spread->thumb_of(view);
         if ((thumb.width <= 0) || (thumb.height <= 0)) { return; }
 
-        wf::pointf_t rel = {(local.x - thumb.x) / (double) thumb.width,
-            (local.y - thumb.y) / (double) thumb.height};
+        wf::pointf_t rel = {(local.x - thumb.x) / thumb.width,
+            (local.y - thumb.y) / thumb.height};
 
         spread->release_for_drag(view);
 
         auto bbox = wf::view_bounding_box_up_to(view, "wobbly");
         wf::move_drag::drag_options_t opts;
-        opts.initial_scale = (double) bbox.width / std::max(1, thumb.width);
+        opts.initial_scale = bbox.width / thumb.width;
         drag->start_drag(view, rel, opts);
     }
 
@@ -76,13 +76,13 @@ struct window_drag_t::impl
         if (!pressed) { return; }
 
         auto cp = wf::get_core().get_cursor_position();
-        wf::point_t to{(int) cp.x, (int) cp.y};
+        wf::pointf_t to = cp;
 
         if (drag->view) { drag->handle_motion(to); return; }
         if (!drag->should_start_pending_drag(to)) { return; }
 
         auto lg = output->get_layout_geometry();
-        wf::pointf_t local{(double) (to.x - lg.x), (double) (to.y - lg.y)};
+        wf::pointf_t local{to.x - lg.x, to.y - lg.y};
         if (auto v = pick(local)) { start(v, local); drag->handle_motion(to); }
     }
 

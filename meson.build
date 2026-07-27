@@ -5,7 +5,7 @@ project('unity-shell-plugins', 'cpp',
 
 wayfire  = dependency('wayfire')
 wfconfig = dependency('wf-config')
-wlroots  = dependency('wlroots-0.19')
+wlroots  = dependency('wlroots-0.20')
 
 plugindir = get_option('libdir') / 'wayfire'
 

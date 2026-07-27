@@ -40,7 +40,7 @@ class wallpaper_stream_t : public wf::scene::node_t
         }
 
         void schedule_instructions(std::vector<wf::scene::render_instruction_t>& instructions,
-            const wf::render_target_t& target, wf::region_t& damage) override
+            const wf::render_target_t& target, wf::regionf_t& damage) override
         {
             auto bbox = self->get_bounding_box();
             auto ours = damage & bbox;
@@ -62,7 +62,7 @@ class wallpaper_stream_t : public wf::scene::node_t
             for (auto& c : children) { c->presentation_feedback(o); }
         }
 
-        void compute_visibility(wf::output_t *o, wf::region_t& visible) override
+        void compute_visibility(wf::output_t *o, wf::regionf_t& visible) override
         {
             wf::scene::compute_visibility_from_list(children, o, visible, {0, 0});
         }
@@ -99,7 +99,7 @@ class backdrop_node_t : public wf::scene::node_t
         {
             self = std::dynamic_pointer_cast<backdrop_node_t>(n->shared_from_this());
             self->connect(&on_damage);
-            auto mark = [=] (const wf::region_t& d)
+            auto mark = [=] (const wf::regionf_t& d)
             {
                 self->bg_damage |= d;
                 push(self->get_bounding_box());
@@ -108,7 +108,7 @@ class backdrop_node_t : public wf::scene::node_t
         }
 
         void schedule_instructions(std::vector<wf::scene::render_instruction_t>& instructions,
-            const wf::render_target_t& target, wf::region_t& damage) override
+            const wf::render_target_t& target, wf::regionf_t& damage) override
         {
             if (!self->bg_damage.empty())
             {
@@ -158,9 +158,9 @@ class backdrop_node_t : public wf::scene::node_t
                         continue;
                     }
 
-                    auto tex = wf::texture_t{self->buffer.get_texture()};
-                    tex.filter_mode = WLR_SCALE_FILTER_BILINEAR;
-                    tex.source_box  = {0.0, 0.0, (double) bufsz.width, (double) bufsz.height};
+                    auto tex = wf::texture_t::from_aux(self->buffer);
+                    tex->set_filter_mode(WLR_SCALE_FILTER_BILINEAR);
+                    tex->set_source_box(wlr_fbox{0.0, 0.0, (double) bufsz.width, (double) bufsz.height});
                     data.pass->add_texture(tex, data.target, card, data.damage);
 
                     if ((dim > 0.0) && ((i != hl.x) || (j != hl.y)))
@@ -171,9 +171,9 @@ class backdrop_node_t : public wf::scene::node_t
             }
         }
 
-        void compute_visibility(wf::output_t *o, wf::region_t&) override
+        void compute_visibility(wf::output_t *o, wf::regionf_t&) override
         {
-            wf::region_t r = self->stream->get_bounding_box();
+            wf::regionf_t r = self->stream->get_bounding_box();
             for (auto& c : bg) { c->compute_visibility(o, r); }
         }
     };
@@ -186,7 +186,7 @@ class backdrop_node_t : public wf::scene::node_t
     wf::point_t  hover{-1, -1};
     std::shared_ptr<wallpaper_stream_t> stream;
     wf::auxilliary_buffer_t buffer;
-    wf::region_t bg_damage;
+    wf::regionf_t bg_damage;
 
     explicit backdrop_node_t(wf::output_t *o) :
         node_t(false), output(o), stream(std::make_shared<wallpaper_stream_t>(o))
@@ -346,7 +346,7 @@ void spread_t::layout_cell(wf::point_t cell,
 
     constexpr double MAX_PREVIEW = 0.95;
     const double spacing   = SPACING;
-    const double monitor_h = std::max(1, output->get_relative_geometry().height);
+    const double monitor_h = std::max(1.0, output->get_relative_geometry().height);
 
     struct win_t
     {
@@ -358,7 +358,7 @@ void spread_t::layout_cell(wf::point_t cell,
     for (auto& v : cell_views)
     {
         auto vg = v->get_geometry();
-        const double bw = std::max(1, vg.width), bh = std::max(1, vg.height);
+        const double bw = std::max(1.0, vg.width), bh = std::max(1.0, vg.height);
         const double ratio = std::clamp(bh / monitor_h, 0.0, 1.0);
         ws.push_back({v, bw, bh, 1.5 - 0.5 * ratio, vg.x + bw / 2.0, vg.y + bh / 2.0});
     }
@@ -465,8 +465,7 @@ void spread_t::layout_cell(wf::point_t cell,
                 ? row_y + (row_h - clone_h) / 2.0
                 : row_y + row_h - clone_h;
 
-            aim_slot(w.view, cell,
-                {(int) clone_x, (int) clone_y, (int) clone_w, (int) clone_h});
+            aim_slot(w.view, cell, {clone_x, clone_y, clone_w, clone_h});
 
             x += cell_w + spacing;
         }
@@ -489,8 +488,8 @@ void spread_t::place(const frame_ctx& ctx, const render_state& state)
         if (!d.slot || d.dragging) { continue; }
 
         auto pvg = view->get_geometry();
-        wf::geometry_t region = {d.cell.x * ctx.output.width, d.cell.y * ctx.output.height,
-            ctx.output.width, ctx.output.height};
+        wf::geometry_t region = wf::construct_box(
+            wf::pointf_t(d.cell.x * ctx.output.width, d.cell.y * ctx.output.height), ctx.output);
         wf::geometry_t in_region = wf::interpolate(pvg, (wf::geometry_t) *d.slot, ep);
 
         const int i = ctx.cur_ws.x + d.cell.x, j = ctx.cur_ws.y + d.cell.y;
@@ -504,8 +503,8 @@ void spread_t::place(const frame_ctx& ctx, const render_state& state)
         /* Scale and translate the whole window family (the toplevel plus its
          * dialogs) as one rigid unit about the toplevel's centre, so dialogs ride
          * on their parent preview at the right size and position. */
-        const double sx = (double) fin.width  / std::max(1, pvg.width);
-        const double sy = (double) fin.height / std::max(1, pvg.height);
+        const double sx = fin.width  / std::max(1.0, pvg.width);
+        const double sy = fin.height / std::max(1.0, pvg.height);
         const double pcx = pvg.x + pvg.width / 2.0, pcy = pvg.y + pvg.height / 2.0;
         const double fcx = fin.x + fin.width / 2.0, fcy = fin.y + fin.height / 2.0;
 

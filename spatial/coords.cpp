@@ -19,8 +19,7 @@ frame_ctx make_frame_ctx(wf::output_t *o)
     c.grid     = o->wset()->get_workspace_grid_size();
     c.workarea = o->workarea->get_workarea();
 
-    auto og = o->get_relative_geometry();
-    c.output = {std::max(1, og.width), std::max(1, og.height)};
+    c.output = wf::dimensions(o->get_relative_geometry());
 
     auto gc = wf::get_core().get_cursor_position();
     auto lg = o->get_layout_geometry();

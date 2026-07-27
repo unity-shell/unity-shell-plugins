@@ -38,16 +38,16 @@ inline double lerp(double a, double b, double t) { return a + (b - a) * t; }
  */
 inline wf::geometry_t lerp_rect(wf::geometry_t a, wf::geometry_t b, double t)
 {
-    return {(int) lerp(a.x, b.x, t), (int) lerp(a.y, b.y, t),
-        (int) lerp(a.width, b.width, t), (int) lerp(a.height, b.height, t)};
+    return {lerp(a.x, b.x, t), lerp(a.y, b.y, t),
+        lerp(a.width, b.width, t), lerp(a.height, b.height, t)};
 }
 
 inline wf::geometry_t card_rect(const frame_ctx& c, int gap)
 {
     const double s = std::min(
-        (double) (c.workarea.width  - 2 * gap) / std::max(1, c.output.width),
-        (double) (c.workarea.height - 2 * gap) / std::max(1, c.output.height));
-    const int cw = (int) (c.output.width * s), ch = (int) (c.output.height * s);
+        (c.workarea.width  - 2 * gap) / std::max(1, c.output.width),
+        (c.workarea.height - 2 * gap) / std::max(1, c.output.height));
+    const double cw = c.output.width * s, ch = c.output.height * s;
     return {c.workarea.x + (c.workarea.width - cw) / 2,
         c.workarea.y + (c.workarea.height - ch) / 2, cw, ch};
 }
@@ -55,23 +55,23 @@ inline wf::geometry_t card_rect(const frame_ctx& c, int gap)
 inline wf::geometry_t cell_rect(const frame_ctx& c, int i, int j, int gap)
 {
     const double s = std::min(
-        (double) (c.workarea.width  - (c.grid.width  + 1) * gap) /
+        (c.workarea.width  - (c.grid.width  + 1) * gap) /
         std::max(1, c.grid.width  * c.output.width),
-        (double) (c.workarea.height - (c.grid.height + 1) * gap) /
+        (c.workarea.height - (c.grid.height + 1) * gap) /
         std::max(1, c.grid.height * c.output.height));
-    const int cw = (int) (c.output.width * s), ch = (int) (c.output.height * s);
-    const int gw = c.grid.width * cw + (c.grid.width + 1) * gap;
-    const int gh = c.grid.height * ch + (c.grid.height + 1) * gap;
-    const int ox = c.workarea.x + (c.workarea.width - gw) / 2 + gap;
-    const int oy = c.workarea.y + (c.workarea.height - gh) / 2 + gap;
+    const double cw = c.output.width * s, ch = c.output.height * s;
+    const double gw = c.grid.width * cw + (c.grid.width + 1) * gap;
+    const double gh = c.grid.height * ch + (c.grid.height + 1) * gap;
+    const double ox = c.workarea.x + (c.workarea.width - gw) / 2 + gap;
+    const double oy = c.workarea.y + (c.workarea.height - gh) / 2 + gap;
     return {ox + i * (cw + gap), oy + j * (ch + gap), cw, ch};
 }
 
 inline wf::point_t cell_at(const frame_ctx& c, wf::pointf_t p, int gap)
 {
     auto r0 = cell_rect(c, 0, 0, gap);
-    const int i = (int) std::floor((p.x - r0.x) / (double) (r0.width + gap));
-    const int j = (int) std::floor((p.y - r0.y) / (double) (r0.height + gap));
+    const int i = (int) std::floor((p.x - r0.x) / (r0.width + gap));
+    const int j = (int) std::floor((p.y - r0.y) / (r0.height + gap));
     return {std::clamp(i, 0, c.grid.width - 1), std::clamp(j, 0, c.grid.height - 1)};
 }
 
@@ -86,20 +86,19 @@ inline wf::geometry_t cell_on_screen(const frame_ctx& c, int i, int j, double g,
     const double ep = std::clamp(g, 0.0, 1.0);         /* expose / card-grow phase */
     const double op = std::clamp(g - 1.0, 0.0, 1.0);   /* zoom-out-to-wall phase */
 
-    wf::geometry_t full{0, 0, c.output.width, c.output.height};
+    wf::geometry_t full = wf::construct_box({0, 0}, c.output);
     wf::geometry_t card = lerp_rect(full, card_rect(c, gap), ep);
 
     /* Scale the whole grid around the current cell: at op==0 the current cell
      * lands on the card, at op==1 every cell lands on its full wall rect. */
     auto cc = cell_rect(c, c.cur_ws.x, c.cur_ws.y, gap);
-    const double s0 = (double) card.width / std::max(1, cc.width);
+    const double s0 = card.width / std::max(1.0, cc.width);
     const double s  = lerp(s0, 1.0, op);
     const double tx = (card.x - cc.x * s0) * (1.0 - op);
     const double ty = (card.y - cc.y * s0) * (1.0 - op);
 
     auto gc = cell_rect(c, i, j, gap);
-    return {(int) std::lround(gc.x * s + tx), (int) std::lround(gc.y * s + ty),
-        (int) std::lround(gc.width * s), (int) std::lround(gc.height * s)};
+    return {gc.x * s + tx, gc.y * s + ty, gc.width * s, gc.height * s};
 }
 
 /**
@@ -111,10 +110,10 @@ inline wf::geometry_t pane_on_screen(const frame_ctx& c, int i, int j, double g,
     wf::point_t dir, double amount)
 {
     auto base = cell_on_screen(c, c.cur_ws.x, c.cur_ws.y, g, gap);
-    const int sx = base.width + gap, sy = base.height + gap;
+    const double sx = base.width + gap, sy = base.height + gap;
     const double panx = -dir.x * amount * sx, pany = -dir.y * amount * sy;
-    return {(int) std::lround(base.x + (i - c.cur_ws.x) * sx + panx),
-        (int) std::lround(base.y + (j - c.cur_ws.y) * sy + pany), base.width, base.height};
+    return {base.x + (i - c.cur_ws.x) * sx + panx,
+        base.y + (j - c.cur_ws.y) * sy + pany, base.width, base.height};
 }
 }
 }
