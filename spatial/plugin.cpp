@@ -52,14 +52,14 @@ class plugin : public wf::plugin_interface_t,
 
         ipc->register_method("spatial/close", [this] (wf::json_t) -> wf::json_t
         {
-            if (auto c = active_controller()) { c->close_overview(); }
+            if (auto c = active_controller()) { c->close_spread(); }
             return wf::json_t{};
         });
 
         ipc->register_method("spatial/inhibit", [this] (wf::json_t) -> wf::json_t
         {
             controller::inhibit();
-            for (auto& [o, c] : output_instance) { c->close_overview(); }
+            for (auto& [o, c] : output_instance) { c->close_spread(); }
             return wf::json_t{};
         });
 

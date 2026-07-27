@@ -2,7 +2,7 @@
 <wayfire>
 	<plugin name="spatial">
 		<_short>Spatial</_short>
-		<_long>Unified window and workspace overview: a window spread that escalates to a zoomed workspace wall.</_long>
+		<_long>Unified window and workspace spread: a window spread that escalates to a zoomed workspace wall.</_long>
 		<category>Desktop</category>
 
 		<option name="windows-spread" type="activator">
@@ -13,7 +13,7 @@
 
 		<option name="workspaces-spread" type="activator">
 			<_short>Workspaces spread</_short>
-			<_long>Show the workspaces overview; escalates from the window spread if already open.</_long>
+			<_long>Show the workspaces spread; escalates from the window spread if already open.</_long>
 			<default>&lt;super&gt; KEY_S</default>
 		</option>
 
