@@ -60,7 +60,7 @@ class controller : public wf::per_output_plugin_instance_t,
     void gesture_pinch(int fingers, double scale);
 
     void settle_to(double target);
-    void relayout();
+    void relayout(bool animate = true);
     void activate_window(wayfire_toplevel_view view, wf::point_t ws);
     void end_to_desktop();
     void recenter_apps_spread();

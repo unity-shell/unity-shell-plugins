@@ -39,7 +39,9 @@ void controller::init()
     spread = std::make_unique<spread_t>(output);
     drag = std::make_unique<window_drag_t>(output, spread.get(),
         [this] (wayfire_toplevel_view v, wf::point_t ws) { activate_window(v, ws); },
-        [this] { relayout(); });
+        /* Snap after a drop: the thumbnail is already at the drop point, so
+         * animating its slot would fling it back from the source cell. */
+        [this] { relayout(false); });
     grab = std::make_unique<wf::input_grab_t>(PLUGIN_NAME, output, this, this, nullptr);
     slide = std::make_unique<slide_t>(output);
 
@@ -207,9 +209,9 @@ void controller::relayout_if_idle()
     relayout();
 }
 
-void controller::relayout()
+void controller::relayout(bool animate)
 {
-    spread->relayout(make_frame_ctx(output), filter);
+    spread->relayout(make_frame_ctx(output), filter, animate);
 
     /* The slots ease toward their new targets on their own; keep the frame loop
      * running so that easing is drawn when the spread is otherwise settled. */
