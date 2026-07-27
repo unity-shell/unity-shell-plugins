@@ -1,0 +1,6 @@
+[wrap-git]
+url = https://github.com/WayfireWM/wf-json
+revision = 70039e13cdeaebd8ec498ed30bf5ab91c2e313ec
+
+[provide]
+wf-json = wfjson

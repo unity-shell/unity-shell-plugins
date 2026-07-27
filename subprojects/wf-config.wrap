@@ -1,6 +1,6 @@
 [wrap-git]
 url = https://github.com/WayfireWM/wf-config
-revision = ee64fbd2f6a4bce8362da862535cdcaee6b8f13b
+revision = 85cca14ac889b2f8bbd53569d9751ed2e8f5c079
 
 [provide]
 wf-config = wfconfig
