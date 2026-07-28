@@ -102,31 +102,31 @@ void controller::apply_resources()
 
 void controller::publish_mode()
 {
-    /* Broadcast the current stage as a real ipc-rules event for the panel clients */
+    /* Broadcast the current stage as an ipc-rules event for the panel clients.
+     * Only set_stage() calls this, and only on an actual change, so no dedup. */
     const char *name =
         (cur == stage::apps_spread)       ? "apps_spread" :
         (cur == stage::workspaces_spread) ? "workspaces_spread" : "desktop";
-    if (published_stage == name) { return; }
-    published_stage = name;
 
     wf::json_t data;
     data["stage"] = name;
     wf::ipc_rules::send_event_to_subscribes(data, "spatial/stage#");
 }
 
+void controller::set_stage(stage s)
+{
+    if (s == cur) { return; }
+    /* The filter's lifetime is the spread's: it clears on the single transition
+     * back to the desktop, so every fresh spread opens unfiltered and only
+     * spread_app ever sets it. This is the one place `cur` is written. */
+    if (s == stage::desktop) { filter.clear(); }
+    cur = s;
+    publish_mode();
+}
+
 void controller::reconcile()
 {
-    stage want = stage_at(g_axis.value(), cur);
-    if (want != cur)
-    {
-        /* Filter is owned by the desktop boundary: it clears whenever we land
-         * back on the desktop, so every fresh spread opens unfiltered and only
-         * spread_app ever sets it. */
-        if (want == stage::desktop) { filter.clear(); }
-        cur = want;
-        publish_mode();
-    }
-
+    set_stage(stage_at(g_axis.value(), cur));
     apply_resources();
 }
 
@@ -159,11 +159,17 @@ void controller::advance()
     if (g_axis.interacting_now()) { output->render->schedule_redraw(); return; }
     if (g_axis.animating())
     {
-        reconcile();
+        /* A settle animation holds the destination stage it was started with, so
+         * we do NOT re-derive the stage from the in-flight g -- that is what used
+         * to bounce an opening spread back to the desktop at g~0 (the old 1e-3
+         * nudge). Keep the resources live and the frames coming. */
+        apply_resources();
         output->render->schedule_redraw();
         return;
     }
 
+    /* Settle finished: latch the final stage from where g landed (e.g. -> desktop
+     * once a close reaches 0). */
     reconcile();
     if (spread->animating()) { output->render->schedule_redraw(); return; }
     unhook();
@@ -174,21 +180,19 @@ void controller::unhook()   { t_hooks->ensure(false); }
 
 void controller::settle_to(double target)
 {
-    /* Enter the spread up front when opening from the desktop, so there is a
-     * live spread to animate into (reconcile re-drives the mode as g rises). */
-    if ((cur == stage::desktop) && (target > 0.0))
+    /* Opening or switching (target > 0): enter the destination stage now, so
+     * there is a live spread to animate into and the panel reflects it at once.
+     * The settle then holds that stage for the whole animation (see advance),
+     * so no boundary nudge is needed. Closing (target 0) keeps the current stage
+     * until the animation lands on the desktop, so the spread stays visible as
+     * it collapses -- advance's final reconcile latches desktop at g == 0. */
+    if (target > 0.0)
     {
-        cur = stage::apps_spread;
-        publish_mode();
+        set_stage(target >= 2.0 ? stage::workspaces_spread : stage::apps_spread);
         apply_resources();
     }
 
-    double start = g_axis.value();
-    /* Nudge an opening animation off an exact stage boundary: the first frame
-     * can fire with ~0ms elapsed and g sitting on the boundary maps to the lower
-     * stage, which would bounce us straight back. One frame covers the nudge. */
-    if (target > start) { start = std::min(target, start + 1e-3); }
-    g_axis.animate_to(start, target);
+    g_axis.animate_to(g_axis.value(), target);
     set_hook();
 }
 
@@ -235,10 +239,8 @@ void controller::end_to_desktop()
     if (slide) { slide->cancel(); }
     gesturing = false;
     if (drag) { drag->cancel(); }
-    filter.clear();
     g_axis.pin(0.0);
-    cur = stage::desktop;
-    publish_mode();
+    set_stage(stage::desktop);   /* clears the filter + publishes */
     apply_resources();
     unhook();
 
@@ -261,7 +263,7 @@ void controller::recenter_apps_spread()
     render_frame();
     output->render->schedule_redraw();
     g_axis.pin(1.0);
-    cur = stage::apps_spread;
+    set_stage(stage::apps_spread);
     set_hook();
 }
 
@@ -358,8 +360,7 @@ void controller::gesture_begin(int fingers)
      * swipe opens an unfiltered spread. */
     if (cur == stage::desktop)
     {
-        cur = stage::apps_spread;
-        publish_mode();
+        set_stage(stage::apps_spread);
         apply_resources();
     }
 
@@ -380,11 +381,7 @@ void controller::gesture_update(double dx, double dy)
     /* Follow the stage across the spread <-> wall boundary while dragging, but
      * never drop to desktop mid-gesture (that teardown would drop the grab). */
     stage want = stage_at(g_axis.value(), cur);
-    if ((want != cur) && (want != stage::desktop))
-    {
-        cur = want;
-        publish_mode();
-    }
+    if (want != stage::desktop) { set_stage(want); }
 
     output->render->schedule_redraw();
 }

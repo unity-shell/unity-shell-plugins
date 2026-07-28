@@ -71,6 +71,7 @@ class controller : public wf::per_output_plugin_instance_t,
     void stage_on_motion();
     void stage_slide_settle();
 
+    void set_stage(stage s);   /* the one writer of `cur`: publishes + clears filter on desktop */
     void reconcile();
     void apply_resources();
     void publish_mode();
@@ -132,7 +133,6 @@ class controller : public wf::per_output_plugin_instance_t,
         .cancel = [this] { end_to_desktop(); },
     };
 
-    std::string published_stage;   /* last stage broadcast via the spatial/stage# event */
 
     wf::signal::connection_t<wf::view_unmapped_signal> on_view_unmapped =
         [this] (wf::view_unmapped_signal *ev) { handle_unmapped(ev); };
