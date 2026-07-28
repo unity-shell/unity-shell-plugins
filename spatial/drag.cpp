@@ -36,7 +36,7 @@ struct window_drag_t::impl
     void drop(wayfire_toplevel_view v)
     {
         auto ctx    = make_frame_ctx(output);
-        auto target = coords::cell_at(ctx, ctx.cursor, WALL_GAP);
+        auto target = coords::cell_at(ctx, ctx.cursor);
         auto src    = output->wset()->get_view_main_workspace(v);
         if ((target.x != src.x) || (target.y != src.y))
         {
@@ -86,7 +86,7 @@ struct window_drag_t::impl
         if (auto v = pick(local)) { start(v, local); drag->handle_motion(to); }
     }
 
-    window_drag_t::result release()
+    bool release()
     {
         pressed = false;
 
@@ -95,17 +95,17 @@ struct window_drag_t::impl
             auto v = drag->view;
             drag->handle_input_released();
             drop(v);
-            return window_drag_t::result::dragged;
+            return false;
         }
 
         auto ctx = make_frame_ctx(output);
         if (auto v = pick(ctx.cursor))
         {
-            on_click(v, coords::cell_at(ctx, ctx.cursor, WALL_GAP));
-            return window_drag_t::result::window_click;
+            on_click(v, coords::cell_at(ctx, ctx.cursor));
+            return false;
         }
 
-        return window_drag_t::result::empty_click;
+        return true;   /* empty click */
     }
 
     void cancel()
@@ -132,7 +132,7 @@ window_drag_t::~window_drag_t() = default;
 
 void window_drag_t::press() { priv->press(); }
 void window_drag_t::motion() { priv->motion(); }
-window_drag_t::result window_drag_t::release() { return priv->release(); }
+bool window_drag_t::release() { return priv->release(); }
 void window_drag_t::cancel() { priv->cancel(); }
 void window_drag_t::forget(wayfire_toplevel_view view) { priv->forget(view); }
 bool window_drag_t::active() const { return priv->active(); }

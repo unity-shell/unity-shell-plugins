@@ -47,13 +47,12 @@ void slide_t::update(double dx, double dy)
 
 void slide_t::release()
 {
-    const bool commit = (pan.value() > 0.5) && (target != from);
-    pan.animate_to(pan.value(), commit ? 1.0 : 0.0);
+    pan.animate_to(pan.value(), committing() ? 1.0 : 0.0);
 }
 
 std::optional<wf::point_t> slide_t::finish()
 {
-    const bool commit = (pan.value() > 0.5) && (target != from);
+    const bool commit = committing();
     active_ = false;
     return commit ? std::optional<wf::point_t>(target) : std::nullopt;
 }

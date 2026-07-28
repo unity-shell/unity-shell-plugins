@@ -35,6 +35,8 @@ class slide_t
 
   private:
     wf::point_t neighbor(wf::point_t from, double dx, double dy) const;
+    /* Commit iff the pan is past halfway toward an actual neighbour. */
+    bool committing() { return (pan.value() > 0.5) && (target != from); }
 
     wf::output_t *output;
     tracker pan{"spatial/duration"};
