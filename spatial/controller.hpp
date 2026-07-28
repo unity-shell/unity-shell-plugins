@@ -47,23 +47,22 @@ class next_frame_call
         output->render->schedule_redraw();
     }
 
-    void cancel()
+    void cancel() { if (armed) { disarm(); } }
+
+  private:
+    void disarm()
     {
-        if (!armed) { return; }
         output->render->rem_effect(&hook);
         armed   = false;
         pending = nullptr;
     }
 
-  private:
     wf::output_t *output = nullptr;
     std::function<void ()> pending;
     bool armed = false;
     wf::effect_hook_t hook = [this] {
-        output->render->rem_effect(&hook);
-        armed = false;
-        auto fn = std::move(pending);
-        pending = nullptr;
+        auto fn = std::move(pending);   /* grab before disarm clears pending */
+        disarm();
         if (fn) { fn(); }
     };
 };
@@ -165,7 +164,6 @@ class controller : public wf::per_output_plugin_instance_t,
         .capabilities = wf::CAPABILITY_MANAGE_COMPOSITOR,
         .cancel = [this] { end_to_desktop(); },
     };
-
 
     wf::signal::connection_t<wf::view_unmapped_signal> on_view_unmapped =
         [this] (wf::view_unmapped_signal *ev) { handle_unmapped(ev); };

@@ -369,7 +369,7 @@ void spread_t::layout_cell(wf::point_t cell,
         auto vg = v->get_geometry();
         const double bw = std::max(1.0, vg.width), bh = std::max(1.0, vg.height);
         const double ratio = std::clamp(bh / monitor_h, 0.0, 1.0);
-        const double boost = SMALL_BOOST_MAX - (SMALL_BOOST_MAX - SMALL_BOOST_MIN) * ratio;
+        const double boost = coords::lerp(SMALL_BOOST_MAX, SMALL_BOOST_MIN, ratio);
         ws.push_back({v, bw, bh, boost, vg.x + bw / 2.0, vg.y + bh / 2.0});
     }
 
@@ -483,6 +483,10 @@ void spread_t::place(const frame_ctx& ctx, const render_state& state)
     const double ep = std::clamp(state.g, 0.0, 1.0);
     const bool sliding = state.pan_dir.x || state.pan_dir.y || state.pan_amount != 0;
 
+    /* Every view resolves its slot inside the same cell-local [0, output) box,
+     * so build it once rather than per view. */
+    const wf::geometry_t region = wf::construct_box(wf::pointf_t(0.0, 0.0), ctx.output);
+
     for (auto& [view, d] : views)
     {
         if (!d.slot || d.dragging) { continue; }
@@ -498,7 +502,6 @@ void spread_t::place(const frame_ctx& ctx, const render_state& state)
         pvg_local.x -= (double) i * ctx.output.width;
         pvg_local.y -= (double) j * ctx.output.height;
 
-        wf::geometry_t region    = wf::construct_box(wf::pointf_t(0.0, 0.0), ctx.output);
         wf::geometry_t in_region = wf::interpolate(pvg_local, (wf::geometry_t) *d.slot, ep);
 
         auto cell = sliding

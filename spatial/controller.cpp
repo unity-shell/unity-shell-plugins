@@ -92,10 +92,11 @@ void controller::fini()
 
 void controller::apply_resources()
 {
-    /* A slide shows the spread even from the desktop, so it needs the overview
-     * resource set regardless of stage -- treat an active slide as the spread
-     * stage. This keeps a single resource path (no hand-forcing in begin_slide). */
-    auto w = resources_for((slide && slide->active()) ? stage::apps_spread : cur);
+    /* The overview needs its resources whenever it is visible: any non-desktop
+     * stage, or an active slide (which pans the spread even from the desktop).
+     * This keeps a single resource path (no hand-forcing in begin_slide). */
+    const bool apps_spread = (cur != stage::desktop) || (slide && slide->active());
+    auto w = resources_for(apps_spread ? stage::apps_spread : stage::desktop);
     t_activate->ensure(w.activated);
     t_top->ensure(w.top);
     t_grab->ensure(w.grabbed);
