@@ -112,10 +112,10 @@ class controller : public wf::per_output_plugin_instance_t,
     void stage_on_motion();
     void stage_slide_settle();
 
-    void set_stage(stage s);   /* the one writer of `cur`: publishes + clears filter on desktop */
+    void set_stage(stage s);   /* the one writer of `cur`: clears the filter on the desktop edge */
     void reconcile();
     void apply_resources();
-    void publish_mode();
+    void publish_stage(stage s);   /* emit spatial/stage# for the panel; deduped by `published` */
     void render_frame();
     void advance();
     void set_hook();
@@ -144,9 +144,9 @@ class controller : public wf::per_output_plugin_instance_t,
     swipe_gesture_t swipe;
 
     tracker g_axis{"spatial/duration"};
-    render_state rs;
 
-    stage cur = stage::desktop;
+    stage cur = stage::desktop;         /* input stage: latched, holds through a settle */
+    stage published = stage::desktop;   /* last stage sent to the panel: tracks the visible g */
 
     std::optional<toggled> t_activate, t_top, t_grab, t_hooks;
 

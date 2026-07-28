@@ -104,13 +104,17 @@ void controller::apply_resources()
     else { spread->clear(); }
 }
 
-void controller::publish_mode()
+void controller::publish_stage(stage s)
 {
-    /* Broadcast the current stage as an ipc-rules event for the panel clients.
-     * Only set_stage() calls this, and only on an actual change, so no dedup. */
+    /* Broadcast the visible stage as an ipc-rules event for the panel clients.
+     * Driven by the on-screen g (see render_frame), so the panel tracks an
+     * opening/closing animation live rather than the latched input stage. */
+    if (s == published) { return; }
+    published = s;
+
     const char *name =
-        (cur == stage::apps_spread)       ? "apps_spread" :
-        (cur == stage::workspaces_spread) ? "workspaces_spread" : "desktop";
+        (s == stage::apps_spread)       ? "apps_spread" :
+        (s == stage::workspaces_spread) ? "workspaces_spread" : "desktop";
 
     wf::json_t data;
     data["stage"] = name;
@@ -120,12 +124,10 @@ void controller::publish_mode()
 void controller::set_stage(stage s)
 {
     if (s == cur) { return; }
-    /* The filter's lifetime is the spread's: it clears on the single transition
-     * back to the desktop, so every fresh spread opens unfiltered and only
-     * spread_app ever sets it. This is the one place `cur` is written. */
+    /* Filter clears on the transition back to desktop, so each spread opens
+     * unfiltered; only spread_app sets it. */
     if (s == stage::desktop) { filter.clear(); }
     cur = s;
-    publish_mode();
 }
 
 void controller::reconcile()
@@ -136,8 +138,12 @@ void controller::reconcile()
 
 void controller::render_frame()
 {
+    render_state rs;
     auto ctx = make_frame_ctx(output);
     rs.g = g_axis.value();
+    /* Feed the panel from the visible axis, so an opening/closing animation is
+     * reflected live (the input stage `cur` holds its destination and would lag). */
+    publish_stage(stage_at(rs.g, published));
     if (slide->active())
     {
         rs.pan_dir    = slide->pan_dir();
@@ -163,17 +169,15 @@ void controller::advance()
     if (g_axis.interacting_now()) { output->render->schedule_redraw(); return; }
     if (g_axis.animating())
     {
-        /* A settle animation holds the destination stage it was started with, so
-         * we do NOT re-derive the stage from the in-flight g -- that is what used
-         * to bounce an opening spread back to the desktop at g~0 (the old 1e-3
-         * nudge). Keep the resources live and the frames coming. */
+        /* A settle holds the destination stage it started with; don't re-derive
+         * from the in-flight g (that would bounce an opening spread to desktop at
+         * g~0). Just keep resources live and frames coming. */
         apply_resources();
         output->render->schedule_redraw();
         return;
     }
 
-    /* Settle finished: latch the final stage from where g landed (e.g. -> desktop
-     * once a close reaches 0). */
+    /* Settle finished: latch the final stage from where g landed. */
     reconcile();
     if (spread->animating()) { output->render->schedule_redraw(); return; }
     unhook();
@@ -184,12 +188,9 @@ void controller::unhook()   { t_hooks->ensure(false); }
 
 void controller::settle_to(double target)
 {
-    /* Opening or switching (target > 0): enter the destination stage now, so
-     * there is a live spread to animate into and the panel reflects it at once.
-     * The settle then holds that stage for the whole animation (see advance),
-     * so no boundary nudge is needed. Closing (target 0) keeps the current stage
-     * until the animation lands on the desktop, so the spread stays visible as
-     * it collapses -- advance's final reconcile latches desktop at g == 0. */
+    /* Open/switch (target > 0): enter the destination stage now so there's a live
+     * spread to animate into; advance holds it for the animation. Close (target 0)
+     * keeps the current stage until g reaches desktop, so it stays visible. */
     if (target > 0.0)
     {
         set_stage(target >= 2.0 ? stage::workspaces_spread : stage::apps_spread);
@@ -217,7 +218,7 @@ void controller::relayout_if_idle()
 
 void controller::relayout(bool animate)
 {
-    spread->relayout(make_frame_ctx(output), filter, animate);
+    spread->layout(make_frame_ctx(output), filter, animate);
 
     /* The slots ease toward their new targets on their own; keep the frame loop
      * running so that easing is drawn when the spread is otherwise settled. */
@@ -244,7 +245,8 @@ void controller::end_to_desktop()
     gesturing = false;
     if (drag) { drag->cancel(); }
     g_axis.pin(0.0);
-    set_stage(stage::desktop);   /* clears the filter + publishes */
+    set_stage(stage::desktop);
+    publish_stage(stage::desktop);  /* this path unhooks, so no render frame will publish */
     apply_resources();
     unhook();
 
@@ -257,7 +259,7 @@ void controller::recenter_apps_spread()
     /* Slots are cell-local (see renderer place()), so the workspace switch does
      * not move them -- relayout re-computes for the new current workspace and
      * the slots ease from where they already are (a no-op), with no snap. */
-    spread->relayout(make_frame_ctx(output), filter, /*animate=*/true);
+    spread->layout(make_frame_ctx(output), filter, /*animate=*/true);
     render_frame();
     output->render->schedule_redraw();
     g_axis.pin(1.0);
@@ -401,11 +403,10 @@ void controller::stage_on_button(const wlr_pointer_button_event& ev)
     if (ev.state != WL_POINTER_BUTTON_STATE_PRESSED)
     {
         /* The wall commits a thumbnail drag, or picks the clicked workspace. */
-        if ((cur == stage::workspaces_spread) &&
-            (drag->release() == window_drag_t::result::empty_click))
+        if ((cur == stage::workspaces_spread) && drag->release())
         {
             auto ctx = make_frame_ctx(output);
-            output->wset()->set_workspace(coords::cell_at(ctx, ctx.cursor, WALL_GAP));
+            output->wset()->set_workspace(coords::cell_at(ctx, ctx.cursor));
             settle_to(0.0);
         }
 
@@ -428,8 +429,6 @@ void controller::stage_on_motion()
     if (cur != stage::workspaces_spread) { return; }
 
     drag->motion();
-    auto ctx = make_frame_ctx(output);
-    rs.hover = coords::cell_at(ctx, ctx.cursor, WALL_GAP);
 }
 
 void controller::stage_slide_settle()
@@ -479,9 +478,6 @@ void controller::handle_keyboard_key(wf::seat_t*, wlr_keyboard_key_event ev)
     if (to == cur_ws) { return; }
 
     output->wset()->set_workspace(to);
-    /* Drop the stale pointer hover so the glow follows the keyboard selection:
-     * hl falls back to the new current workspace until the pointer moves again. */
-    rs.hover = {-1, -1};
     deferred.arm(output, [this] { relayout(); });
 }
 
