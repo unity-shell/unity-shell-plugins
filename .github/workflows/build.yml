@@ -1,0 +1,28 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    container:
+      image: ghcr.io/unity-shell/ci/wayfire:v0.11.0
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - run: meson setup build --wrap-mode=nofallback
+
+      - run: meson compile -C build
