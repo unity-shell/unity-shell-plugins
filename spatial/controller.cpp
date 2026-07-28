@@ -14,6 +14,7 @@
 #include <wayfire/render-manager.hpp>
 #include <wayfire/scene.hpp>
 #include <wayfire/scene-operations.hpp>
+#include <wayfire/plugins/ipc/ipc-rules-common.hpp>
 
 namespace spatial
 {
@@ -101,19 +102,16 @@ void controller::apply_resources()
 
 void controller::publish_mode()
 {
-    const bool a = (cur == stage::apps_spread);
-    const bool w = (cur == stage::workspaces_spread);
-    if (a != pub_apps)
-    {
-        a ? output->activate_plugin(&state_apps) : output->deactivate_plugin(&state_apps);
-        pub_apps = a;
-    }
+    /* Broadcast the current stage as a real ipc-rules event for the panel clients */
+    const char *name =
+        (cur == stage::apps_spread)       ? "apps_spread" :
+        (cur == stage::workspaces_spread) ? "workspaces_spread" : "desktop";
+    if (published_stage == name) { return; }
+    published_stage = name;
 
-    if (w != pub_workspaces)
-    {
-        w ? output->activate_plugin(&state_workspaces) : output->deactivate_plugin(&state_workspaces);
-        pub_workspaces = w;
-    }
+    wf::json_t data;
+    data["stage"] = name;
+    wf::ipc_rules::send_event_to_subscribes(data, "spatial/stage#");
 }
 
 void controller::reconcile()

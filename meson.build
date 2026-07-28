@@ -7,6 +7,10 @@ wayfire  = dependency('wayfire')
 wfconfig = dependency('wf-config')
 wlroots  = dependency('wlroots-0.20')
 
+add_project_arguments(
+  '-I' + wayfire.get_variable(pkgconfig: 'includedir') / 'wayfire',
+  language: 'cpp')
+
 plugindir = get_option('libdir') / 'wayfire'
 
 if get_option('gsettings')

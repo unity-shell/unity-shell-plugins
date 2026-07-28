@@ -134,9 +134,7 @@ class controller : public wf::per_output_plugin_instance_t,
         .cancel = [this] { end_to_desktop(); },
     };
 
-    wf::plugin_activation_data_t state_apps{.name = "spatial-spread", .capabilities = 0};
-    wf::plugin_activation_data_t state_workspaces{.name = "spatial-wall", .capabilities = 0};
-    bool pub_apps = false, pub_workspaces = false;
+    std::string published_stage;   /* last stage broadcast via the spatial/stage# event */
 
     wf::signal::connection_t<wf::view_unmapped_signal> on_view_unmapped =
         [this] (wf::view_unmapped_signal *ev) { handle_unmapped(ev); };
