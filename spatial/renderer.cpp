@@ -270,8 +270,6 @@ void spread_t::layout(const frame_ctx& ctx, const std::vector<std::string>& filt
     ensure_backdrop();
     laid_out_ws = ctx.cur_ws;
 
-    const int ow = ctx.output.width, oh = ctx.output.height;
-
     /* Partition the workspace views: surface minimized ones, gather the app-id
      * filtered-out ones, and bucket the rest by workspace cell. */
     std::map<std::pair<int, int>, std::vector<wayfire_toplevel_view>> cells;
@@ -302,16 +300,13 @@ void spread_t::layout(const frame_ctx& ctx, const std::vector<std::string>& filt
 
     /* Reconcile the filter's hidden set idempotently: un-hide views we hid that
      * are no longer filtered, then hide the newly filtered ones. Surfaced
-     * minimized overrides (restore == false) are left for teardown. */
+     * minimized overrides (surfaced() == true) are left for teardown. */
     for (auto it = node_overrides.begin(); it != node_overrides.end(); )
     {
-        const bool we_hid = it->second;   /* hidden views restore to enabled */
+        const bool we_hid = !it->second.surfaced();
         const bool still  = std::find(want_hidden.begin(), want_hidden.end(), it->first) != want_hidden.end();
-        if (we_hid && !still)
-        {
-            wf::scene::set_node_enabled(it->first->get_root_node(), it->second);
-            it = node_overrides.erase(it);
-        } else { ++it; }
+        if (we_hid && !still) { it = node_overrides.erase(it); }   /* destructor re-enables */
+        else { ++it; }
     }
     for (auto& v : want_hidden) { override_node(v, false); }
 
@@ -326,9 +321,13 @@ void spread_t::layout(const frame_ctx& ctx, const std::vector<std::string>& filt
      * views ease from their current slot, so the arrangement never snaps. */
     for (auto& [cell, cell_views] : cells)
     {
+        /* Cell-local: slots live relative to the window's own workspace tile,
+         * not an absolute cell*output offset. place() composes the tile's
+         * on-screen position each frame, so the stored slot is invariant to a
+         * workspace switch (which shifts d.cell but not the real window). */
         wf::geometry_t area = {
-            cell.first * ow + ctx.workarea.x + OUTER_MARGIN,
-            cell.second * oh + ctx.workarea.y + OUTER_MARGIN,
+            ctx.workarea.x + OUTER_MARGIN,
+            ctx.workarea.y + OUTER_MARGIN,
             ctx.workarea.width - OUTER_MARGIN * 2,
             ctx.workarea.height - OUTER_MARGIN * 2};
         layout_cell({cell.first, cell.second}, cell_views, area);
@@ -487,12 +486,20 @@ void spread_t::place(const frame_ctx& ctx, const render_state& state)
     {
         if (!d.slot || d.dragging) { continue; }
 
-        auto pvg = view->get_geometry();
-        wf::geometry_t region = wf::construct_box(
-            wf::pointf_t(d.cell.x * ctx.output.width, d.cell.y * ctx.output.height), ctx.output);
-        wf::geometry_t in_region = wf::interpolate(pvg, (wf::geometry_t) *d.slot, ep);
+        auto pvg = view->get_geometry();   /* absolute; drives the family transform below */
 
+        /* Resolve the slot in a cell-local frame: shift the real window back by
+         * its own workspace offset so it sits in the same [0, output) box the
+         * slot was laid out in. This frame does not move when the current
+         * workspace changes, so a slide commit needs no snap. */
         const int i = ctx.cur_ws.x + d.cell.x, j = ctx.cur_ws.y + d.cell.y;
+        wf::geometry_t pvg_local = pvg;
+        pvg_local.x -= (double) i * ctx.output.width;
+        pvg_local.y -= (double) j * ctx.output.height;
+
+        wf::geometry_t region    = wf::construct_box(wf::pointf_t(0.0, 0.0), ctx.output);
+        wf::geometry_t in_region = wf::interpolate(pvg_local, (wf::geometry_t) *d.slot, ep);
+
         auto cell = sliding
             ? coords::pane_on_screen(ctx, i, j, state.g, WALL_GAP, state.pan_dir, state.pan_amount)
             : coords::cell_on_screen(ctx, i, j, state.g, WALL_GAP);
@@ -599,17 +606,14 @@ void spread_t::reconcile_family(wayfire_toplevel_view parent, view_data& d)
 
 void spread_t::override_node(wayfire_toplevel_view view, bool on)
 {
-    if (node_overrides.count(view)) { return; }   /* once per spread */
-    wf::scene::set_node_enabled(view->get_root_node(), on);
-    node_overrides[view] = !on;                    /* restore is the balanced inverse */
+    /* try_emplace is a no-op if we already forced this view (once per spread);
+     * the toggle applies `on` now and restores it when erased/cleared. */
+    node_overrides.try_emplace(view, view->get_root_node(), on);
 }
 
 void spread_t::restore_node(wayfire_toplevel_view view)
 {
-    auto it = node_overrides.find(view);
-    if (it == node_overrides.end()) { return; }
-    wf::scene::set_node_enabled(view->get_root_node(), it->second);
-    node_overrides.erase(it);
+    node_overrides.erase(view);   /* toggle destructor restores the node */
 }
 
 void spread_t::clear()
@@ -617,12 +621,7 @@ void spread_t::clear()
     for (auto& [view, d] : views) { detach_family(d); }
     views.clear();
 
-    /* Restore every node we forced, once, when the spread ends. */
-    for (auto& [view, restore] : node_overrides)
-    {
-        wf::scene::set_node_enabled(view->get_root_node(), restore);
-    }
-    node_overrides.clear();
+    node_overrides.clear();   /* each toggle restores its node on destruction */
 
     remove_backdrop();
     laid_out_ws = {-1, -1};

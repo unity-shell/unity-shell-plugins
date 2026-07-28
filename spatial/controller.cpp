@@ -255,11 +255,10 @@ void controller::end_to_desktop()
 void controller::recenter_apps_spread()
 {
     slide->cancel();
-    /* Recompute for the new current workspace but snap: the pan already moved
-     * everything into place, so animating the (now workspace-relative) slots
-     * would just re-ease to visually identical targets -- the "weird" second
-     * animation after a slide commit. */
-    spread->relayout(make_frame_ctx(output), filter, /*animate=*/false);
+    /* Slots are cell-local (see renderer place()), so the workspace switch does
+     * not move them -- relayout re-computes for the new current workspace and
+     * the slots ease from where they already are (a no-op), with no snap. */
+    spread->relayout(make_frame_ctx(output), filter, /*animate=*/true);
     render_frame();
     output->render->schedule_redraw();
     g_axis.pin(1.0);

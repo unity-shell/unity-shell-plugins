@@ -10,6 +10,8 @@
 #include <wayfire/toplevel-view.hpp>
 #include <wayfire/view-transform.hpp>
 #include <wayfire/option-wrapper.hpp>
+#include <wayfire/scene.hpp>
+#include <wayfire/scene-operations.hpp>
 #include <wayfire/plugins/common/geometry-animation.hpp>
 
 #include "coords.hpp"
@@ -28,6 +30,40 @@ struct render_state
 };
 
 class backdrop_node_t;
+
+/**
+ * RAII enable/disable of a view's scene node against the enabled counter Wayfire
+ * itself also drives. It pushes the requested state on construction and pops the
+ * inverse on destruction, so the counter is always left exactly as found -- no
+ * hand-balanced bookkeeping, and impossible to leak.
+ */
+class node_toggle
+{
+  public:
+    node_toggle(wf::scene::node_ptr node, bool enable) :
+        node(std::move(node)), enable(enable)
+    {
+        wf::scene::set_node_enabled(this->node, enable);
+    }
+
+    ~node_toggle()
+    {
+        if (node) { wf::scene::set_node_enabled(node, !enable); }
+    }
+
+    node_toggle(node_toggle&& o) noexcept :
+        node(std::move(o.node)), enable(o.enable) { o.node = nullptr; }
+    node_toggle(const node_toggle&)            = delete;
+    node_toggle& operator =(const node_toggle&) = delete;
+    node_toggle& operator =(node_toggle&&)      = delete;
+
+    /* True when we surfaced a node (minimized view), false when we hid one. */
+    bool surfaced() const { return enable; }
+
+  private:
+    wf::scene::node_ptr node;
+    bool enable;
+};
 
 /**
  * Maintains spread layout, per-view transforms and backdrop composition.
@@ -92,10 +128,8 @@ class spread_t
     wf::option_wrapper_t<wf::animation_description_t> anim_dur{"spatial/duration"};
     std::map<wayfire_toplevel_view, view_data> views;
     /* Views whose scene-node enabled state we forced (minimized views surfaced,
-     * filtered views hidden), mapped to the enabled-state to restore on teardown
-     * -- the balanced inverse of what we applied, so the shared counter Wayfire
-     * also drives is left exactly as we found it. */
-    std::map<wayfire_toplevel_view, bool> node_overrides;
+     * filtered views hidden). Each toggle restores its node when erased/cleared. */
+    std::map<wayfire_toplevel_view, node_toggle> node_overrides;
     std::shared_ptr<backdrop_node_t> backdrop;
     wf::point_t laid_out_ws{-1, -1};
     bool slot_animate = true;   /* set per layout(); consumed by aim_slot */
