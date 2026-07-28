@@ -23,6 +23,8 @@ inline constexpr int SPACING = 20;
 inline constexpr int OUTER_MARGIN = 36;
 inline constexpr int WALL_GAP = 12;
 inline constexpr float DIM_INACTIVE = 0.6f;
+/* Alpha of the white glow laid over the hovered/current wall cell. */
+inline constexpr float HOVER_GLOW = 0.16f;
 
 /**
  * Returns the configured wall gap tint for workspace spread rendering.

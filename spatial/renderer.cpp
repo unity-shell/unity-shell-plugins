@@ -136,10 +136,16 @@ class backdrop_node_t : public wf::scene::node_t
             data.pass->clear(data.damage, wall_gap_color());
 
             auto ctx = make_frame_ctx(self->output);
+            /* Highlight the hovered cell, or the current workspace when the
+             * pointer is away (hover.x < 0, e.g. after arrow-key navigation). */
             const wf::point_t hl = (self->hover.x >= 0) ? self->hover : ctx.cur_ws;
-            /* Dim non-focused cells only as the wall opens (g -> 2); absent on
-             * the spread and during a slide, so every pane reads full-bright. */
-            const double dim = (1.0 - DIM_INACTIVE) * std::clamp(self->g - 1.0, 0.0, 1.0);
+            /* The hover feedback ramps in only as the wall opens (g -> 2); it is
+             * absent on the spread and during a slide, so every pane reads
+             * full-bright there. The highlighted cell gets a white glow, every
+             * other cell is dimmed -- so the focus reads clearly either way. */
+            const double wall = std::clamp(self->g - 1.0, 0.0, 1.0);
+            const double dim  = (1.0 - DIM_INACTIVE) * wall;
+            const double glow = HOVER_GLOW * wall;
             const bool sliding = self->pan_dir.x || self->pan_dir.y || self->pan_amount != 0;
             const auto bufsz = self->buffer.get_size();
 
@@ -163,7 +169,15 @@ class backdrop_node_t : public wf::scene::node_t
                     tex->set_source_box(wlr_fbox{0.0, 0.0, (double) bufsz.width, (double) bufsz.height});
                     data.pass->add_texture(tex, data.target, card, data.damage);
 
-                    if ((dim > 0.0) && ((i != hl.x) || (j != hl.y)))
+                    const bool focused = (i == hl.x) && (j == hl.y);
+                    if (focused)
+                    {
+                        if (glow > 0.0)
+                        {
+                            data.pass->add_rect({1.0, 1.0, 1.0, glow}, data.target, card, data.damage);
+                        }
+                    }
+                    else if (dim > 0.0)
                     {
                         data.pass->add_rect({0.0, 0.0, 0.0, dim}, data.target, card, data.damage);
                     }
@@ -491,16 +505,17 @@ void spread_t::place(const frame_ctx& ctx, const render_state& state)
     {
         if (!d.slot || d.dragging) { continue; }
 
-        auto pvg = view->get_geometry();   /* absolute; drives the family transform below */
+        auto pvg = view->get_geometry();   /* current-ws-relative; drives the family transform */
 
         /* Resolve the slot in a cell-local frame: shift the real window back by
-         * its own workspace offset so it sits in the same [0, output) box the
-         * slot was laid out in. This frame does not move when the current
-         * workspace changes, so a slide commit needs no snap. */
+         * its OWN-cell offset (d.cell, relative to the current workspace -- which
+         * is exactly the offset get_geometry() already carries), so it sits in the
+         * same [0, output) box the slot was laid out in. This frame does not move
+         * when the current workspace changes, so a slide commit needs no snap. */
         const int i = ctx.cur_ws.x + d.cell.x, j = ctx.cur_ws.y + d.cell.y;
         wf::geometry_t pvg_local = pvg;
-        pvg_local.x -= (double) i * ctx.output.width;
-        pvg_local.y -= (double) j * ctx.output.height;
+        pvg_local.x -= (double) d.cell.x * ctx.output.width;
+        pvg_local.y -= (double) d.cell.y * ctx.output.height;
 
         wf::geometry_t in_region = wf::interpolate(pvg_local, (wf::geometry_t) *d.slot, ep);
 

@@ -479,6 +479,9 @@ void controller::handle_keyboard_key(wf::seat_t*, wlr_keyboard_key_event ev)
     if (to == cur_ws) { return; }
 
     output->wset()->set_workspace(to);
+    /* Drop the stale pointer hover so the glow follows the keyboard selection:
+     * hl falls back to the new current workspace until the pointer moves again. */
+    rs.hover = {-1, -1};
     deferred.arm(output, [this] { relayout(); });
 }
 
