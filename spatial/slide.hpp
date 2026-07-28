@@ -35,7 +35,6 @@ class slide_t
 
   private:
     wf::point_t neighbor(wf::point_t from, double dx, double dy) const;
-    static bool same(wf::point_t a, wf::point_t b) { return (a.x == b.x) && (a.y == b.y); }
 
     wf::output_t *output;
     tracker pan{"spatial/duration"};

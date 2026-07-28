@@ -363,9 +363,9 @@ void controller::gesture_begin(int fingers)
         apply_resources();
     }
 
-    gp_lo = std::max(0.0, anchor - 1.0);
-    gp_hi = std::min(2.0, anchor + 1.0);
-    g_axis.begin(from, gp_lo, gp_hi);
+    const double lo = std::max(0.0, anchor - 1.0);
+    const double hi = std::min(2.0, anchor + 1.0);
+    g_axis.begin(from, lo, hi);
     gesturing = true;
     set_hook();
 }
@@ -485,7 +485,7 @@ void controller::handle_keyboard_key(wf::seat_t*, wlr_keyboard_key_event ev)
 
     to.x = std::clamp(to.x, 0, dims.width - 1);
     to.y = std::clamp(to.y, 0, dims.height - 1);
-    if (same_ws(to, cur_ws)) { return; }
+    if (to == cur_ws) { return; }
 
     output->wset()->set_workspace(to);
     run_next_frame([this] { relayout(); });

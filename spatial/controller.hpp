@@ -83,7 +83,6 @@ class controller : public wf::per_output_plugin_instance_t,
     void slide_update(double dx, double dy);
     void slide_end();
     void finish_slide();
-    static bool same_ws(wf::point_t a, wf::point_t b) { return a.x == b.x && a.y == b.y; }
 
     void handle_pointer_button(const wlr_pointer_button_event& ev) override;
     void handle_pointer_motion(wf::pointf_t position, uint32_t time_ms) override;
@@ -113,7 +112,6 @@ class controller : public wf::per_output_plugin_instance_t,
     std::vector<std::string> filter;
     bool   gesturing = false;
     bool   self_activating = false;
-    double gp_lo = 0, gp_hi = 2;
 
     wf::effect_hook_t pre_hook  = [this] { render_frame(); };
     wf::effect_hook_t post_hook = [this] { advance(); };
