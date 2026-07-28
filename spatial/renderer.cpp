@@ -343,7 +343,17 @@ void spread_t::layout_cell(wf::point_t cell,
     const int n = (int) cell_views.size();
     if (n == 0) { return; }
 
+    /* Cap so a preview never upscales past ~the cell. */
     constexpr double MAX_PREVIEW = 0.95;
+    /* Small windows read as postage stamps, so scale them up a touch: a
+     * zero-height window gets SMALL_BOOST_MAX, a full-height one none. */
+    constexpr double SMALL_BOOST_MAX = 1.5;
+    constexpr double SMALL_BOOST_MIN = 1.0;
+    /* Row-count score: preview scale dominates; cell fill only breaks ties
+     * between row counts that yield near-equal scale. */
+    constexpr double SCALE_WEIGHT = 1.0;
+    constexpr double SPACE_WEIGHT = 0.1;
+
     const double spacing   = SPACING;
     const double monitor_h = std::max(1.0, output->get_relative_geometry().height);
 
@@ -359,7 +369,8 @@ void spread_t::layout_cell(wf::point_t cell,
         auto vg = v->get_geometry();
         const double bw = std::max(1.0, vg.width), bh = std::max(1.0, vg.height);
         const double ratio = std::clamp(bh / monitor_h, 0.0, 1.0);
-        ws.push_back({v, bw, bh, 1.5 - 0.5 * ratio, vg.x + bw / 2.0, vg.y + bh / 2.0});
+        const double boost = SMALL_BOOST_MAX - (SMALL_BOOST_MAX - SMALL_BOOST_MIN) * ratio;
+        ws.push_back({v, bw, bh, boost, vg.x + bw / 2.0, vg.y + bh / 2.0});
     }
 
     std::sort(ws.begin(), ws.end(),
@@ -370,7 +381,7 @@ void spread_t::layout_cell(wf::point_t cell,
 
     struct row_t { int start, count; double width, height; };
     std::vector<row_t> best;
-    double best_scale = -1, best_space = 0;
+    double best_scale = 0, best_score = -1;
 
     for (int num_rows = 1; num_rows <= n; num_rows++)
     {
@@ -420,19 +431,9 @@ void spread_t::layout_cell(wf::point_t cell,
         const double used_w = grid_w * scale + hspace;
         const double used_h = grid_h * scale + vspace;
         const double space  = (used_w * used_h) / (area.width * area.height);
+        const double score  = scale * SCALE_WEIGHT + space * SPACE_WEIGHT;
 
-        bool better;
-        if (best_scale < 0) { better = true; }
-        else if ((scale > best_scale) && (space > best_space)) { better = true; }
-        else if (scale > best_scale)
-        {
-            better = (scale - best_scale) * 1.0 > (best_space - space) * 0.1;
-        } else if (space > best_space)
-        {
-            better = (space - best_space) * 0.1 > (best_scale - scale) * 1.0;
-        } else { better = false; }
-
-        if (better) { best = rows; best_scale = scale; best_space = space; }
+        if (score > best_score) { best = rows; best_scale = scale; best_score = score; }
     }
 
     double grid_h = 0;

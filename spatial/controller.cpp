@@ -92,7 +92,10 @@ void controller::fini()
 
 void controller::apply_resources()
 {
-    auto w = resources_for(cur);
+    /* A slide shows the spread even from the desktop, so it needs the overview
+     * resource set regardless of stage -- treat an active slide as the spread
+     * stage. This keeps a single resource path (no hand-forcing in begin_slide). */
+    auto w = resources_for((slide && slide->active()) ? stage::apps_spread : cur);
     t_activate->ensure(w.activated);
     t_top->ensure(w.top);
     t_grab->ensure(w.grabbed);
@@ -244,12 +247,7 @@ void controller::end_to_desktop()
     apply_resources();
     unhook();
 
-    if (deferred_armed)
-    {
-        output->render->rem_effect(&deferred_hook);
-        deferred_armed = false;
-        deferred_fn = nullptr;
-    }
+    deferred.cancel();
 }
 
 void controller::recenter_apps_spread()
@@ -303,15 +301,11 @@ bool controller::cursor_here() const
 
 void controller::begin_slide()
 {
-    /* A slide shows the spread even from the desktop, so force the resources on
-     * (the desktop stage would otherwise hold none) before handing off to the
-     * pan tracker. */
-    t_activate->ensure(true);
-    t_top->ensure(true);
-    t_grab->ensure(true);
-    spread->ensure_layout(make_frame_ctx(output), filter);
-
+    /* Mark the slide active first, then reconcile resources through the one path:
+     * apply_resources sees the active slide and grants the overview set (and lays
+     * out the spread), even from the desktop stage. */
     slide->begin();
+    apply_resources();
     set_hook();
 }
 
@@ -484,24 +478,12 @@ void controller::handle_keyboard_key(wf::seat_t*, wlr_keyboard_key_event ev)
     if (to == cur_ws) { return; }
 
     output->wset()->set_workspace(to);
-    run_next_frame([this] { relayout(); });
+    deferred.arm(output, [this] { relayout(); });
 }
 
 void controller::update_cursor()
 {
     wf::get_core().set_cursor(drag->active() ? "grabbing" : "default");
-}
-
-void controller::run_next_frame(std::function<void ()> fn)
-{
-    deferred_fn = std::move(fn);
-    if (!deferred_armed)
-    {
-        deferred_armed = true;
-        output->render->add_effect(&deferred_hook, wf::OUTPUT_EFFECT_PRE);
-    }
-
-    output->render->schedule_redraw();
 }
 
 void controller::handle_mapped(wf::view_mapped_signal *ev)

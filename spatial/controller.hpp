@@ -27,6 +27,48 @@
 namespace spatial
 {
 /**
+ * Runs a callback once on the next PRE-render frame, then disarms itself.
+ * Used to defer a relayout until after a workspace-switch transaction has
+ * committed (the next frame), so the spread re-centres against settled
+ * geometry. Re-arming before it fires just replaces the pending callback.
+ */
+class next_frame_call
+{
+  public:
+    void arm(wf::output_t *on, std::function<void ()> fn)
+    {
+        output  = on;
+        pending = std::move(fn);
+        if (!armed)
+        {
+            armed = true;
+            output->render->add_effect(&hook, wf::OUTPUT_EFFECT_PRE);
+        }
+        output->render->schedule_redraw();
+    }
+
+    void cancel()
+    {
+        if (!armed) { return; }
+        output->render->rem_effect(&hook);
+        armed   = false;
+        pending = nullptr;
+    }
+
+  private:
+    wf::output_t *output = nullptr;
+    std::function<void ()> pending;
+    bool armed = false;
+    wf::effect_hook_t hook = [this] {
+        output->render->rem_effect(&hook);
+        armed = false;
+        auto fn = std::move(pending);
+        pending = nullptr;
+        if (fn) { fn(); }
+    };
+};
+
+/**
  * Per-output spread controller (the State-pattern context).
  *
  * One continuous axis g in [0, 2] is the single source of truth: g==0 desktop,
@@ -90,7 +132,6 @@ class controller : public wf::per_output_plugin_instance_t,
     void handle_keyboard_key(wf::seat_t*, wlr_keyboard_key_event ev) override;
     void update_cursor();
 
-    void run_next_frame(std::function<void ()> fn);
     void handle_mapped(wf::view_mapped_signal *ev);
     void handle_unmapped(wf::view_unmapped_signal *ev);
     void handle_focus_request(wf::view_focus_request_signal *ev);
@@ -117,15 +158,7 @@ class controller : public wf::per_output_plugin_instance_t,
     wf::effect_hook_t pre_hook  = [this] { render_frame(); };
     wf::effect_hook_t post_hook = [this] { advance(); };
 
-    std::function<void ()> deferred_fn;
-    bool deferred_armed = false;
-    wf::effect_hook_t deferred_hook = [this] {
-        output->render->rem_effect(&deferred_hook);
-        deferred_armed = false;
-        auto fn = std::move(deferred_fn);
-        deferred_fn = nullptr;
-        if (fn) { fn(); }
-    };
+    next_frame_call deferred;
 
     wf::plugin_activation_data_t grab_interface{
         .name = PLUGIN_NAME,
