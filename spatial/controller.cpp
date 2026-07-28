@@ -14,6 +14,7 @@
 #include <wayfire/render-manager.hpp>
 #include <wayfire/scene.hpp>
 #include <wayfire/scene-operations.hpp>
+#include <wayfire/plugins/ipc/ipc-rules-common.hpp>
 
 namespace spatial
 {
@@ -91,7 +92,11 @@ void controller::fini()
 
 void controller::apply_resources()
 {
-    auto w = resources_for(cur);
+    /* The overview needs its resources whenever it is visible: any non-desktop
+     * stage, or an active slide (which pans the spread even from the desktop).
+     * This keeps a single resource path (no hand-forcing in begin_slide). */
+    const bool apps_spread = (cur != stage::desktop) || (slide && slide->active());
+    auto w = resources_for(apps_spread ? stage::apps_spread : stage::desktop);
     t_activate->ensure(w.activated);
     t_top->ensure(w.top);
     t_grab->ensure(w.grabbed);
@@ -99,43 +104,46 @@ void controller::apply_resources()
     else { spread->clear(); }
 }
 
-void controller::publish_mode()
+void controller::publish_stage(stage s)
 {
-    const bool a = (cur == stage::apps_spread);
-    const bool w = (cur == stage::workspaces_spread);
-    if (a != pub_apps)
-    {
-        a ? output->activate_plugin(&state_apps) : output->deactivate_plugin(&state_apps);
-        pub_apps = a;
-    }
+    /* Broadcast the visible stage as an ipc-rules event for the panel clients.
+     * Driven by the on-screen g (see render_frame), so the panel tracks an
+     * opening/closing animation live rather than the latched input stage. */
+    if (s == published) { return; }
+    published = s;
 
-    if (w != pub_workspaces)
-    {
-        w ? output->activate_plugin(&state_workspaces) : output->deactivate_plugin(&state_workspaces);
-        pub_workspaces = w;
-    }
+    const char *name =
+        (s == stage::apps_spread)       ? "apps_spread" :
+        (s == stage::workspaces_spread) ? "workspaces_spread" : "desktop";
+
+    wf::json_t data;
+    data["stage"] = name;
+    wf::ipc_rules::send_event_to_subscribes(data, "spatial/stage#");
+}
+
+void controller::set_stage(stage s)
+{
+    if (s == cur) { return; }
+    /* Filter clears on the transition back to desktop, so each spread opens
+     * unfiltered; only spread_app sets it. */
+    if (s == stage::desktop) { filter.clear(); }
+    cur = s;
 }
 
 void controller::reconcile()
 {
-    stage want = stage_at(g_axis.value(), cur);
-    if (want != cur)
-    {
-        /* Filter is owned by the desktop boundary: it clears whenever we land
-         * back on the desktop, so every fresh spread opens unfiltered and only
-         * spread_app ever sets it. */
-        if (want == stage::desktop) { filter.clear(); }
-        cur = want;
-        publish_mode();
-    }
-
+    set_stage(stage_at(g_axis.value(), cur));
     apply_resources();
 }
 
 void controller::render_frame()
 {
+    render_state rs;
     auto ctx = make_frame_ctx(output);
     rs.g = g_axis.value();
+    /* Feed the panel from the visible axis, so an opening/closing animation is
+     * reflected live (the input stage `cur` holds its destination and would lag). */
+    publish_stage(stage_at(rs.g, published));
     if (slide->active())
     {
         rs.pan_dir    = slide->pan_dir();
@@ -161,11 +169,15 @@ void controller::advance()
     if (g_axis.interacting_now()) { output->render->schedule_redraw(); return; }
     if (g_axis.animating())
     {
-        reconcile();
+        /* A settle holds the destination stage it started with; don't re-derive
+         * from the in-flight g (that would bounce an opening spread to desktop at
+         * g~0). Just keep resources live and frames coming. */
+        apply_resources();
         output->render->schedule_redraw();
         return;
     }
 
+    /* Settle finished: latch the final stage from where g landed. */
     reconcile();
     if (spread->animating()) { output->render->schedule_redraw(); return; }
     unhook();
@@ -176,21 +188,16 @@ void controller::unhook()   { t_hooks->ensure(false); }
 
 void controller::settle_to(double target)
 {
-    /* Enter the spread up front when opening from the desktop, so there is a
-     * live spread to animate into (reconcile re-drives the mode as g rises). */
-    if ((cur == stage::desktop) && (target > 0.0))
+    /* Open/switch (target > 0): enter the destination stage now so there's a live
+     * spread to animate into; advance holds it for the animation. Close (target 0)
+     * keeps the current stage until g reaches desktop, so it stays visible. */
+    if (target > 0.0)
     {
-        cur = stage::apps_spread;
-        publish_mode();
+        set_stage(target >= 2.0 ? stage::workspaces_spread : stage::apps_spread);
         apply_resources();
     }
 
-    double start = g_axis.value();
-    /* Nudge an opening animation off an exact stage boundary: the first frame
-     * can fire with ~0ms elapsed and g sitting on the boundary maps to the lower
-     * stage, which would bounce us straight back. One frame covers the nudge. */
-    if (target > start) { start = std::min(target, start + 1e-3); }
-    g_axis.animate_to(start, target);
+    g_axis.animate_to(g_axis.value(), target);
     set_hook();
 }
 
@@ -211,7 +218,7 @@ void controller::relayout_if_idle()
 
 void controller::relayout(bool animate)
 {
-    spread->relayout(make_frame_ctx(output), filter, animate);
+    spread->layout(make_frame_ctx(output), filter, animate);
 
     /* The slots ease toward their new targets on their own; keep the frame loop
      * running so that easing is drawn when the spread is otherwise settled. */
@@ -237,33 +244,26 @@ void controller::end_to_desktop()
     if (slide) { slide->cancel(); }
     gesturing = false;
     if (drag) { drag->cancel(); }
-    filter.clear();
     g_axis.pin(0.0);
-    cur = stage::desktop;
-    publish_mode();
+    set_stage(stage::desktop);
+    publish_stage(stage::desktop);  /* this path unhooks, so no render frame will publish */
     apply_resources();
     unhook();
 
-    if (deferred_armed)
-    {
-        output->render->rem_effect(&deferred_hook);
-        deferred_armed = false;
-        deferred_fn = nullptr;
-    }
+    deferred.cancel();
 }
 
 void controller::recenter_apps_spread()
 {
     slide->cancel();
-    /* Recompute for the new current workspace but snap: the pan already moved
-     * everything into place, so animating the (now workspace-relative) slots
-     * would just re-ease to visually identical targets -- the "weird" second
-     * animation after a slide commit. */
-    spread->relayout(make_frame_ctx(output), filter, /*animate=*/false);
+    /* Slots are cell-local (see renderer place()), so the workspace switch does
+     * not move them -- relayout re-computes for the new current workspace and
+     * the slots ease from where they already are (a no-op), with no snap. */
+    spread->layout(make_frame_ctx(output), filter, /*animate=*/true);
     render_frame();
     output->render->schedule_redraw();
     g_axis.pin(1.0);
-    cur = stage::apps_spread;
+    set_stage(stage::apps_spread);
     set_hook();
 }
 
@@ -304,15 +304,11 @@ bool controller::cursor_here() const
 
 void controller::begin_slide()
 {
-    /* A slide shows the spread even from the desktop, so force the resources on
-     * (the desktop stage would otherwise hold none) before handing off to the
-     * pan tracker. */
-    t_activate->ensure(true);
-    t_top->ensure(true);
-    t_grab->ensure(true);
-    spread->ensure_layout(make_frame_ctx(output), filter);
-
+    /* Mark the slide active first, then reconcile resources through the one path:
+     * apply_resources sees the active slide and grants the overview set (and lays
+     * out the spread), even from the desktop stage. */
     slide->begin();
+    apply_resources();
     set_hook();
 }
 
@@ -360,14 +356,13 @@ void controller::gesture_begin(int fingers)
      * swipe opens an unfiltered spread. */
     if (cur == stage::desktop)
     {
-        cur = stage::apps_spread;
-        publish_mode();
+        set_stage(stage::apps_spread);
         apply_resources();
     }
 
-    gp_lo = std::max(0.0, anchor - 1.0);
-    gp_hi = std::min(2.0, anchor + 1.0);
-    g_axis.begin(from, gp_lo, gp_hi);
+    const double lo = std::max(0.0, anchor - 1.0);
+    const double hi = std::min(2.0, anchor + 1.0);
+    g_axis.begin(from, lo, hi);
     gesturing = true;
     set_hook();
 }
@@ -382,11 +377,7 @@ void controller::gesture_update(double dx, double dy)
     /* Follow the stage across the spread <-> wall boundary while dragging, but
      * never drop to desktop mid-gesture (that teardown would drop the grab). */
     stage want = stage_at(g_axis.value(), cur);
-    if ((want != cur) && (want != stage::desktop))
-    {
-        cur = want;
-        publish_mode();
-    }
+    if (want != stage::desktop) { set_stage(want); }
 
     output->render->schedule_redraw();
 }
@@ -412,11 +403,10 @@ void controller::stage_on_button(const wlr_pointer_button_event& ev)
     if (ev.state != WL_POINTER_BUTTON_STATE_PRESSED)
     {
         /* The wall commits a thumbnail drag, or picks the clicked workspace. */
-        if ((cur == stage::workspaces_spread) &&
-            (drag->release() == window_drag_t::result::empty_click))
+        if ((cur == stage::workspaces_spread) && drag->release())
         {
             auto ctx = make_frame_ctx(output);
-            output->wset()->set_workspace(coords::cell_at(ctx, ctx.cursor, WALL_GAP));
+            output->wset()->set_workspace(coords::cell_at(ctx, ctx.cursor));
             settle_to(0.0);
         }
 
@@ -439,8 +429,6 @@ void controller::stage_on_motion()
     if (cur != stage::workspaces_spread) { return; }
 
     drag->motion();
-    auto ctx = make_frame_ctx(output);
-    rs.hover = coords::cell_at(ctx, ctx.cursor, WALL_GAP);
 }
 
 void controller::stage_slide_settle()
@@ -487,27 +475,15 @@ void controller::handle_keyboard_key(wf::seat_t*, wlr_keyboard_key_event ev)
 
     to.x = std::clamp(to.x, 0, dims.width - 1);
     to.y = std::clamp(to.y, 0, dims.height - 1);
-    if (same_ws(to, cur_ws)) { return; }
+    if (to == cur_ws) { return; }
 
     output->wset()->set_workspace(to);
-    run_next_frame([this] { relayout(); });
+    deferred.arm(output, [this] { relayout(); });
 }
 
 void controller::update_cursor()
 {
     wf::get_core().set_cursor(drag->active() ? "grabbing" : "default");
-}
-
-void controller::run_next_frame(std::function<void ()> fn)
-{
-    deferred_fn = std::move(fn);
-    if (!deferred_armed)
-    {
-        deferred_armed = true;
-        output->render->add_effect(&deferred_hook, wf::OUTPUT_EFFECT_PRE);
-    }
-
-    output->render->schedule_redraw();
 }
 
 void controller::handle_mapped(wf::view_mapped_signal *ev)

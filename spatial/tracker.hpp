@@ -62,7 +62,7 @@ class tracker
     }
 
     void animate_to(double from, double to) { interacting = false; anim.animate(from, to); }
-    void pin(double v) { interacting = false; anim.animate(v, v); }
+    void pin(double v) { animate_to(v, v); }
 
   private:
     wf::animation::simple_animation_t anim;

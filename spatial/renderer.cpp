@@ -1,8 +1,9 @@
 #include "renderer.hpp"
 #include "config.hpp"
+#include "backdrop.hpp"
+#include "packing.hpp"
 
 #include <algorithm>
-#include <cmath>
 #include <set>
 #include <utility>
 
@@ -11,212 +12,11 @@
 #include <wayfire/workarea.hpp>
 #include <wayfire/workspace-set.hpp>
 #include <wayfire/scene.hpp>
-#include <wayfire/scene-render.hpp>
 #include <wayfire/scene-operations.hpp>
-#include <wayfire/view-helpers.hpp>
-#include <wayfire/config/types.hpp>
-#include <wayfire/option-wrapper.hpp>
 #include <wayfire/plugins/common/geometry-animation.hpp>
 
 namespace spatial
 {
-/* Scene stream node that captures background/bottom layers into a texture. */
-class wallpaper_stream_t : public wf::scene::node_t
-{
-    class instance_t : public wf::scene::render_instance_t
-    {
-        wallpaper_stream_t *self;
-        std::vector<wf::scene::render_instance_uptr> children;
-
-      public:
-        instance_t(wallpaper_stream_t *node, const wf::scene::damage_callback& push) :
-            self(node)
-        {
-            for (auto& view : wf::collect_views_from_output(self->output,
-                {wf::scene::layer::BACKGROUND, wf::scene::layer::BOTTOM}))
-            {
-                view->get_transformed_node()->gen_render_instances(children, push, self->output);
-            }
-        }
-
-        void schedule_instructions(std::vector<wf::scene::render_instruction_t>& instructions,
-            const wf::render_target_t& target, wf::region_t& damage) override
-        {
-            auto bbox = self->get_bounding_box();
-            auto ours = damage & bbox;
-            if (ours.empty()) { return; }
-
-            for (auto& c : children) { c->schedule_instructions(instructions, target, ours); }
-            damage ^= bbox;
-            instructions.push_back({.instance = this, .target = target, .damage = ours});
-        }
-
-        void render(const wf::scene::render_instruction_t& data) override
-        {
-            static wf::option_wrapper_t<wf::color_t> bg{"core/background_color"};
-            data.pass->clear(data.damage, bg);
-        }
-
-        void presentation_feedback(wf::output_t *o) override
-        {
-            for (auto& c : children) { c->presentation_feedback(o); }
-        }
-
-        void compute_visibility(wf::output_t *o, wf::region_t& visible) override
-        {
-            wf::scene::compute_visibility_from_list(children, o, visible, {0, 0});
-        }
-    };
-
-  public:
-    wf::output_t *output;
-
-    explicit wallpaper_stream_t(wf::output_t *o) : node_t(false), output(o) {}
-
-    wf::geometry_t get_bounding_box() override { return output->get_relative_geometry(); }
-
-    void gen_render_instances(std::vector<wf::scene::render_instance_uptr>& instances,
-        wf::scene::damage_callback push, wf::output_t *) override
-    {
-        instances.push_back(std::make_unique<instance_t>(this, push));
-    }
-
-    std::string stringify() const override { return "spatial-wallpaper"; }
-};
-
-class backdrop_node_t : public wf::scene::node_t
-{
-    class instance_t : public wf::scene::render_instance_t
-    {
-        std::shared_ptr<backdrop_node_t> self;
-        std::vector<wf::scene::render_instance_uptr> bg;
-        wf::scene::damage_callback push;
-        wf::signal::connection_t<wf::scene::node_damage_signal> on_damage =
-            [=] (wf::scene::node_damage_signal *ev) { push(ev->region); };
-
-      public:
-        instance_t(backdrop_node_t *n, const wf::scene::damage_callback& p) : push(p)
-        {
-            self = std::dynamic_pointer_cast<backdrop_node_t>(n->shared_from_this());
-            self->connect(&on_damage);
-            auto mark = [=] (const wf::region_t& d)
-            {
-                self->bg_damage |= d;
-                push(self->get_bounding_box());
-            };
-            self->stream->gen_render_instances(bg, mark, self->output);
-        }
-
-        void schedule_instructions(std::vector<wf::scene::render_instruction_t>& instructions,
-            const wf::render_target_t& target, wf::region_t& damage) override
-        {
-            if (!self->bg_damage.empty())
-            {
-                wf::render_target_t bt{self->buffer};
-                bt.geometry = self->stream->get_bounding_box();
-                bt.scale    = self->output->handle->scale;
-
-                wf::render_pass_params_t p;
-                p.instances        = &bg;
-                p.damage           = self->bg_damage;
-                p.reference_output = self->output;
-                p.target           = bt;
-                p.flags            = wf::RPASS_EMIT_SIGNALS;
-                wf::render_pass_t::run(p);
-                self->bg_damage.clear();
-            }
-
-            auto bbox = self->get_bounding_box();
-            instructions.push_back({.instance = this, .target = target, .damage = damage & bbox});
-            damage ^= bbox;
-        }
-
-        void render(const wf::scene::render_instruction_t& data) override
-        {
-            data.pass->clear(data.damage, wall_gap_color());
-
-            auto ctx = make_frame_ctx(self->output);
-            const wf::point_t hl = (self->hover.x >= 0) ? self->hover : ctx.cur_ws;
-            /* Dim non-focused cells only as the wall opens (g -> 2); absent on
-             * the spread and during a slide, so every pane reads full-bright. */
-            const double dim = (1.0 - DIM_INACTIVE) * std::clamp(self->g - 1.0, 0.0, 1.0);
-            const bool sliding = self->pan_dir.x || self->pan_dir.y || self->pan_amount != 0;
-            const auto bufsz = self->buffer.get_size();
-
-            for (int i = 0; i < ctx.grid.width; i++)
-            {
-                for (int j = 0; j < ctx.grid.height; j++)
-                {
-                    auto card = sliding
-                        ? coords::pane_on_screen(ctx, i, j, self->g, WALL_GAP,
-                            self->pan_dir, self->pan_amount)
-                        : coords::cell_on_screen(ctx, i, j, self->g, WALL_GAP);
-
-                    if ((card.x >= ctx.output.width) || (card.y >= ctx.output.height) ||
-                        (card.x + card.width <= 0) || (card.y + card.height <= 0))
-                    {
-                        continue;
-                    }
-
-                    auto tex = wf::texture_t{self->buffer.get_texture()};
-                    tex.filter_mode = WLR_SCALE_FILTER_BILINEAR;
-                    tex.source_box  = {0.0, 0.0, (double) bufsz.width, (double) bufsz.height};
-                    data.pass->add_texture(tex, data.target, card, data.damage);
-
-                    if ((dim > 0.0) && ((i != hl.x) || (j != hl.y)))
-                    {
-                        data.pass->add_rect({0.0, 0.0, 0.0, dim}, data.target, card, data.damage);
-                    }
-                }
-            }
-        }
-
-        void compute_visibility(wf::output_t *o, wf::region_t&) override
-        {
-            wf::region_t r = self->stream->get_bounding_box();
-            for (auto& c : bg) { c->compute_visibility(o, r); }
-        }
-    };
-
-  public:
-    wf::output_t *output;
-    double g = 0.0;
-    wf::point_t  pan_dir{0, 0};
-    double       pan_amount = 0.0;
-    wf::point_t  hover{-1, -1};
-    std::shared_ptr<wallpaper_stream_t> stream;
-    wf::auxilliary_buffer_t buffer;
-    wf::region_t bg_damage;
-
-    explicit backdrop_node_t(wf::output_t *o) :
-        node_t(false), output(o), stream(std::make_shared<wallpaper_stream_t>(o))
-    {
-        auto bbox = stream->get_bounding_box();
-        buffer.allocate(wf::dimensions(bbox), o->handle->scale,
-            wf::buffer_allocation_hints_t{.needs_alpha = false});
-        bg_damage |= bbox;
-    }
-
-    void update(double g_, wf::point_t dir, double amount, wf::point_t hover_)
-    {
-        g = g_;
-        pan_dir = dir;
-        pan_amount = amount;
-        hover = hover_;
-        wf::scene::damage_node(shared_from_this(), get_bounding_box());
-    }
-
-    void gen_render_instances(std::vector<wf::scene::render_instance_uptr>& instances,
-        wf::scene::damage_callback push, wf::output_t *shown_on) override
-    {
-        if (shown_on != output) { return; }
-        instances.push_back(std::make_unique<instance_t>(this, push));
-    }
-
-    wf::geometry_t get_bounding_box() override { return output->get_layout_geometry(); }
-
-    std::string stringify() const override { return "spatial-backdrop"; }
-};
 
 spread_t::spread_t(wf::output_t *o) : output(o) {}
 spread_t::~spread_t() = default;
@@ -259,18 +59,10 @@ void spread_t::ensure_layout(const frame_ctx& ctx, const std::vector<std::string
     }
 }
 
-void spread_t::relayout(const frame_ctx& ctx, const std::vector<std::string>& filter, bool animate)
-{
-    layout(ctx, filter, animate);
-}
-
 void spread_t::layout(const frame_ctx& ctx, const std::vector<std::string>& filter, bool animate)
 {
-    slot_animate = animate;
     ensure_backdrop();
     laid_out_ws = ctx.cur_ws;
-
-    const int ow = ctx.output.width, oh = ctx.output.height;
 
     /* Partition the workspace views: surface minimized ones, gather the app-id
      * filtered-out ones, and bucket the rest by workspace cell. */
@@ -302,16 +94,13 @@ void spread_t::layout(const frame_ctx& ctx, const std::vector<std::string>& filt
 
     /* Reconcile the filter's hidden set idempotently: un-hide views we hid that
      * are no longer filtered, then hide the newly filtered ones. Surfaced
-     * minimized overrides (restore == false) are left for teardown. */
+     * minimized overrides (surfaced() == true) are left for teardown. */
     for (auto it = node_overrides.begin(); it != node_overrides.end(); )
     {
-        const bool we_hid = it->second;   /* hidden views restore to enabled */
+        const bool we_hid = !it->second.surfaced();
         const bool still  = std::find(want_hidden.begin(), want_hidden.end(), it->first) != want_hidden.end();
-        if (we_hid && !still)
-        {
-            wf::scene::set_node_enabled(it->first->get_root_node(), it->second);
-            it = node_overrides.erase(it);
-        } else { ++it; }
+        if (we_hid && !still) { it = node_overrides.erase(it); }   /* destructor re-enables */
+        else { ++it; }
     }
     for (auto& v : want_hidden) { override_node(v, false); }
 
@@ -324,154 +113,22 @@ void spread_t::layout(const frame_ctx& ctx, const std::vector<std::string>& filt
 
     /* Aim each shown view's slot at its freshly computed target; persistent
      * views ease from their current slot, so the arrangement never snaps. */
+    const double monitor_h = output->get_relative_geometry().height;
     for (auto& [cell, cell_views] : cells)
     {
+        /* Cell-local: slots live relative to the window's own workspace tile,
+         * not an absolute cell*output offset. place() composes the tile's
+         * on-screen position each frame, so the stored slot is invariant to a
+         * workspace switch (which shifts d.cell but not the real window). */
         wf::geometry_t area = {
-            cell.first * ow + ctx.workarea.x + OUTER_MARGIN,
-            cell.second * oh + ctx.workarea.y + OUTER_MARGIN,
+            ctx.workarea.x + OUTER_MARGIN,
+            ctx.workarea.y + OUTER_MARGIN,
             ctx.workarea.width - OUTER_MARGIN * 2,
             ctx.workarea.height - OUTER_MARGIN * 2};
-        layout_cell({cell.first, cell.second}, cell_views, area);
-    }
-}
-
-/* Row-packed preview layout: windows keep their relative sizes, small windows
- * get a gentle scale boost, and the row count that maximises preview scale (then
- * space) wins. Never upscales past MAX_PREVIEW. */
-void spread_t::layout_cell(wf::point_t cell,
-    std::vector<wayfire_toplevel_view>& cell_views, wf::geometry_t area)
-{
-    const int n = (int) cell_views.size();
-    if (n == 0) { return; }
-
-    constexpr double MAX_PREVIEW = 0.95;
-    const double spacing   = SPACING;
-    const double monitor_h = std::max(1, output->get_relative_geometry().height);
-
-    struct win_t
-    {
-        wayfire_toplevel_view view;
-        double bw = 0, bh = 0, boost = 0, cx = 0, cy = 0;
-    };
-    std::vector<win_t> ws;
-    ws.reserve(n);
-    for (auto& v : cell_views)
-    {
-        auto vg = v->get_geometry();
-        const double bw = std::max(1, vg.width), bh = std::max(1, vg.height);
-        const double ratio = std::clamp(bh / monitor_h, 0.0, 1.0);
-        ws.push_back({v, bw, bh, 1.5 - 0.5 * ratio, vg.x + bw / 2.0, vg.y + bh / 2.0});
-    }
-
-    std::sort(ws.begin(), ws.end(),
-        [] (const win_t& a, const win_t& b) { return a.cy < b.cy; });
-
-    double total_w = 0;
-    for (const auto& w : ws) { total_w += w.bw * w.boost; }
-
-    struct row_t { int start, count; double width, height; };
-    std::vector<row_t> best;
-    double best_scale = -1, best_space = 0;
-
-    for (int num_rows = 1; num_rows <= n; num_rows++)
-    {
-        const double ideal = total_w / num_rows;
-        std::vector<row_t> rows;
-        int idx = 0;
-        for (int r = 0; (r < num_rows) && (idx < n); r++)
+        for (auto& p : pack_cell(cell_views, area, monitor_h))
         {
-            row_t row{idx, 0, 0, 0};
-            for (; idx < n; idx++)
-            {
-                const double w = ws[idx].bw * ws[idx].boost;
-                const double h = ws[idx].bh * ws[idx].boost;
-                bool keep;
-                if (row.width + w <= ideal) { keep = true; }
-                else
-                {
-                    const double old_r = row.width / ideal;
-                    const double new_r = (row.width + w) / ideal;
-                    keep = std::abs(1 - new_r) < std::abs(1 - old_r);
-                }
-
-                if (keep || (r == num_rows - 1))
-                {
-                    row.count++;
-                    row.width += w;
-                    row.height = std::max(row.height, h);
-                } else { break; }
-            }
-
-            rows.push_back(row);
+            aim_slot(p.view, {cell.first, cell.second}, p.target, animate);
         }
-
-        double grid_w = 0, grid_h = 0;
-        int max_cols = 0;
-        for (const auto& row : rows)
-        {
-            grid_w  = std::max(grid_w, row.width);
-            grid_h += row.height;
-            max_cols = std::max(max_cols, row.count);
-        }
-
-        const double hspace = (max_cols - 1) * spacing;
-        const double vspace = ((int) rows.size() - 1) * spacing;
-        const double scale  = std::min({std::max(1.0, area.width - hspace) / grid_w,
-            std::max(1.0, area.height - vspace) / grid_h, MAX_PREVIEW});
-        const double used_w = grid_w * scale + hspace;
-        const double used_h = grid_h * scale + vspace;
-        const double space  = (used_w * used_h) / (area.width * area.height);
-
-        bool better;
-        if (best_scale < 0) { better = true; }
-        else if ((scale > best_scale) && (space > best_space)) { better = true; }
-        else if (scale > best_scale)
-        {
-            better = (scale - best_scale) * 1.0 > (best_space - space) * 0.1;
-        } else if (space > best_space)
-        {
-            better = (space - best_space) * 0.1 > (best_scale - scale) * 1.0;
-        } else { better = false; }
-
-        if (better) { best = rows; best_scale = scale; best_space = space; }
-    }
-
-    double grid_h = 0;
-    for (const auto& row : best) { grid_h += row.height; }
-
-    const double total_h = grid_h * best_scale + ((int) best.size() - 1) * spacing;
-    double row_y = area.y + std::max(0.0, (area.height - total_h) / 2.0);
-
-    for (const auto& row : best)
-    {
-        const double row_h = row.height * best_scale;
-        const double row_w = row.width * best_scale + (row.count - 1) * spacing;
-        double x = area.x + std::max(0.0, (area.width - row_w) / 2.0);
-
-        std::vector<int> order;
-        for (int i = row.start; i < row.start + row.count; i++) { order.push_back(i); }
-        std::sort(order.begin(), order.end(),
-            [&] (int a, int b) { return ws[a].cx < ws[b].cx; });
-
-        for (int i : order)
-        {
-            auto& w = ws[i];
-            const double final_scale = std::min(best_scale * w.boost, MAX_PREVIEW);
-            const double cell_w  = w.bw * w.boost * best_scale;
-            const double clone_w = w.bw * final_scale;
-            const double clone_h = w.bh * final_scale;
-            const double clone_x = x + (cell_w - clone_w) / 2.0;
-            const double clone_y = (best.size() == 1)
-                ? row_y + (row_h - clone_h) / 2.0
-                : row_y + row_h - clone_h;
-
-            aim_slot(w.view, cell,
-                {(int) clone_x, (int) clone_y, (int) clone_w, (int) clone_h});
-
-            x += cell_w + spacing;
-        }
-
-        row_y += row_h + spacing;
     }
 }
 
@@ -479,24 +136,33 @@ void spread_t::layout_cell(wf::point_t cell,
  * geometry toward its expose slot by ep=clamp(g,0,1) (the fan-out within its
  * workspace), then map that onto the workspace's on-screen cell at g
  * (cell_on_screen / pane_on_screen) through the view's 2D transformer. */
-void spread_t::place(const frame_ctx& ctx, const render_state& state)
+void spread_t::render(const frame_ctx& ctx, const render_state& state)
 {
     const double ep = std::clamp(state.g, 0.0, 1.0);
-    const bool sliding = state.pan_dir.x || state.pan_dir.y || state.pan_amount != 0;
+
+    /* Every view resolves its slot inside the same cell-local [0, output) box,
+     * so build it once rather than per view. */
+    const wf::geometry_t region = wf::construct_box(wf::pointf_t(0.0, 0.0), ctx.output);
 
     for (auto& [view, d] : views)
     {
         if (!d.slot || d.dragging) { continue; }
 
-        auto pvg = view->get_geometry();
-        wf::geometry_t region = {d.cell.x * ctx.output.width, d.cell.y * ctx.output.height,
-            ctx.output.width, ctx.output.height};
-        wf::geometry_t in_region = wf::interpolate(pvg, (wf::geometry_t) *d.slot, ep);
+        auto pvg = view->get_geometry();   /* current-ws-relative; drives the family transform */
 
+        /* Resolve the slot in a cell-local frame: shift the real window back by
+         * its OWN-cell offset (d.cell, relative to the current workspace -- which
+         * is exactly the offset get_geometry() already carries), so it sits in the
+         * same [0, output) box the slot was laid out in. This frame does not move
+         * when the current workspace changes, so a slide commit needs no snap. */
         const int i = ctx.cur_ws.x + d.cell.x, j = ctx.cur_ws.y + d.cell.y;
-        auto cell = sliding
-            ? coords::pane_on_screen(ctx, i, j, state.g, WALL_GAP, state.pan_dir, state.pan_amount)
-            : coords::cell_on_screen(ctx, i, j, state.g, WALL_GAP);
+        wf::geometry_t pvg_local = pvg;
+        pvg_local.x -= (double) d.cell.x * ctx.output.width;
+        pvg_local.y -= (double) d.cell.y * ctx.output.height;
+
+        wf::geometry_t in_region = wf::interpolate(pvg_local, (wf::geometry_t) *d.slot, ep);
+
+        auto cell = coords::cell_or_pane(ctx, i, j, state.g, state.pan_dir, state.pan_amount);
 
         wf::geometry_t fin = wf::scale_box(region, cell, in_region);
         d.screen = fin;
@@ -504,8 +170,8 @@ void spread_t::place(const frame_ctx& ctx, const render_state& state)
         /* Scale and translate the whole window family (the toplevel plus its
          * dialogs) as one rigid unit about the toplevel's centre, so dialogs ride
          * on their parent preview at the right size and position. */
-        const double sx = (double) fin.width  / std::max(1, pvg.width);
-        const double sy = (double) fin.height / std::max(1, pvg.height);
+        const double sx = fin.width  / std::max(1.0, pvg.width);
+        const double sy = fin.height / std::max(1.0, pvg.height);
         const double pcx = pvg.x + pvg.width / 2.0, pcy = pvg.y + pvg.height / 2.0;
         const double fcx = fin.x + fin.width / 2.0, fcy = fin.y + fin.height / 2.0;
 
@@ -525,12 +191,7 @@ void spread_t::place(const frame_ctx& ctx, const render_state& state)
         }
     }
 
-    if (backdrop) { backdrop->update(state.g, state.pan_dir, state.pan_amount, state.hover); }
-}
-
-void spread_t::render(const frame_ctx& ctx, const render_state& state)
-{
-    place(ctx, state);
+    if (backdrop) { backdrop->update(state.g, state.pan_dir, state.pan_amount); }
 }
 
 bool spread_t::animating()
@@ -543,7 +204,8 @@ bool spread_t::animating()
     return false;
 }
 
-void spread_t::aim_slot(wayfire_toplevel_view view, wf::point_t cell, wf::geometry_t target)
+void spread_t::aim_slot(wayfire_toplevel_view view, wf::point_t cell, wf::geometry_t target,
+    bool animate)
 {
     auto& d = views[view];
     d.cell     = cell;
@@ -557,9 +219,9 @@ void spread_t::aim_slot(wayfire_toplevel_view view, wf::point_t cell, wf::geomet
         d.slot->set_start(target);
     } else
     {
-        /* Ease from the current position, or snap when the layout only shifted
-         * in workspace-relative coordinates (slot_animate == false). */
-        d.slot->set_start(slot_animate ? (wf::geometry_t) *d.slot : target);
+        /* Ease from the current position, or snap (animate == false) when the
+         * layout only shifted in workspace-relative coordinates. */
+        d.slot->set_start(animate ? (wf::geometry_t) *d.slot : target);
     }
 
     d.slot->set_end(target);
@@ -600,17 +262,14 @@ void spread_t::reconcile_family(wayfire_toplevel_view parent, view_data& d)
 
 void spread_t::override_node(wayfire_toplevel_view view, bool on)
 {
-    if (node_overrides.count(view)) { return; }   /* once per spread */
-    wf::scene::set_node_enabled(view->get_root_node(), on);
-    node_overrides[view] = !on;                    /* restore is the balanced inverse */
+    /* try_emplace is a no-op if we already forced this view (once per spread);
+     * the toggle applies `on` now and restores it when erased/cleared. */
+    node_overrides.try_emplace(view, view->get_root_node(), on);
 }
 
 void spread_t::restore_node(wayfire_toplevel_view view)
 {
-    auto it = node_overrides.find(view);
-    if (it == node_overrides.end()) { return; }
-    wf::scene::set_node_enabled(view->get_root_node(), it->second);
-    node_overrides.erase(it);
+    node_overrides.erase(view);   /* toggle destructor restores the node */
 }
 
 void spread_t::clear()
@@ -618,12 +277,7 @@ void spread_t::clear()
     for (auto& [view, d] : views) { detach_family(d); }
     views.clear();
 
-    /* Restore every node we forced, once, when the spread ends. */
-    for (auto& [view, restore] : node_overrides)
-    {
-        wf::scene::set_node_enabled(view->get_root_node(), restore);
-    }
-    node_overrides.clear();
+    node_overrides.clear();   /* each toggle restores its node on destruction */
 
     remove_backdrop();
     laid_out_ws = {-1, -1};

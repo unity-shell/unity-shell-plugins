@@ -27,6 +27,47 @@
 namespace spatial
 {
 /**
+ * Runs a callback once on the next PRE-render frame, then disarms itself.
+ * Used to defer a relayout until after a workspace-switch transaction has
+ * committed (the next frame), so the spread re-centres against settled
+ * geometry. Re-arming before it fires just replaces the pending callback.
+ */
+class next_frame_call
+{
+  public:
+    void arm(wf::output_t *on, std::function<void ()> fn)
+    {
+        output  = on;
+        pending = std::move(fn);
+        if (!armed)
+        {
+            armed = true;
+            output->render->add_effect(&hook, wf::OUTPUT_EFFECT_PRE);
+        }
+        output->render->schedule_redraw();
+    }
+
+    void cancel() { if (armed) { disarm(); } }
+
+  private:
+    void disarm()
+    {
+        output->render->rem_effect(&hook);
+        armed   = false;
+        pending = nullptr;
+    }
+
+    wf::output_t *output = nullptr;
+    std::function<void ()> pending;
+    bool armed = false;
+    wf::effect_hook_t hook = [this] {
+        auto fn = std::move(pending);   /* grab before disarm clears pending */
+        disarm();
+        if (fn) { fn(); }
+    };
+};
+
+/**
  * Per-output spread controller (the State-pattern context).
  *
  * One continuous axis g in [0, 2] is the single source of truth: g==0 desktop,
@@ -71,9 +112,10 @@ class controller : public wf::per_output_plugin_instance_t,
     void stage_on_motion();
     void stage_slide_settle();
 
+    void set_stage(stage s);   /* the one writer of `cur`: clears the filter on the desktop edge */
     void reconcile();
     void apply_resources();
-    void publish_mode();
+    void publish_stage(stage s);   /* emit spatial/stage# for the panel; deduped by `published` */
     void render_frame();
     void advance();
     void set_hook();
@@ -83,14 +125,12 @@ class controller : public wf::per_output_plugin_instance_t,
     void slide_update(double dx, double dy);
     void slide_end();
     void finish_slide();
-    static bool same_ws(wf::point_t a, wf::point_t b) { return a.x == b.x && a.y == b.y; }
 
     void handle_pointer_button(const wlr_pointer_button_event& ev) override;
     void handle_pointer_motion(wf::pointf_t position, uint32_t time_ms) override;
     void handle_keyboard_key(wf::seat_t*, wlr_keyboard_key_event ev) override;
     void update_cursor();
 
-    void run_next_frame(std::function<void ()> fn);
     void handle_mapped(wf::view_mapped_signal *ev);
     void handle_unmapped(wf::view_unmapped_signal *ev);
     void handle_focus_request(wf::view_focus_request_signal *ev);
@@ -104,39 +144,26 @@ class controller : public wf::per_output_plugin_instance_t,
     swipe_gesture_t swipe;
 
     tracker g_axis{"spatial/duration"};
-    render_state rs;
 
-    stage cur = stage::desktop;
+    stage cur = stage::desktop;         /* input stage: latched, holds through a settle */
+    stage published = stage::desktop;   /* last stage sent to the panel: tracks the visible g */
 
     std::optional<toggled> t_activate, t_top, t_grab, t_hooks;
 
     std::vector<std::string> filter;
     bool   gesturing = false;
     bool   self_activating = false;
-    double gp_lo = 0, gp_hi = 2;
 
     wf::effect_hook_t pre_hook  = [this] { render_frame(); };
     wf::effect_hook_t post_hook = [this] { advance(); };
 
-    std::function<void ()> deferred_fn;
-    bool deferred_armed = false;
-    wf::effect_hook_t deferred_hook = [this] {
-        output->render->rem_effect(&deferred_hook);
-        deferred_armed = false;
-        auto fn = std::move(deferred_fn);
-        deferred_fn = nullptr;
-        if (fn) { fn(); }
-    };
+    next_frame_call deferred;
 
     wf::plugin_activation_data_t grab_interface{
         .name = PLUGIN_NAME,
         .capabilities = wf::CAPABILITY_MANAGE_COMPOSITOR,
         .cancel = [this] { end_to_desktop(); },
     };
-
-    wf::plugin_activation_data_t state_apps{.name = "spatial-spread", .capabilities = 0};
-    wf::plugin_activation_data_t state_workspaces{.name = "spatial-wall", .capabilities = 0};
-    bool pub_apps = false, pub_workspaces = false;
 
     wf::signal::connection_t<wf::view_unmapped_signal> on_view_unmapped =
         [this] (wf::view_unmapped_signal *ev) { handle_unmapped(ev); };

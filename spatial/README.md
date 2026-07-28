@@ -13,6 +13,12 @@ Compared with running separate Wayfire `scale` and `expo` plugins, `spatial` kee
 - consistent swipe/pinch/keybinding behavior across both overview stages
 - shared renderer and drag handling so transitions remain continuous
 
+## screenshots
+
+| Desktop (Default) | Apps Spread (Overview/Scale) | Workspaces Spread (Expo) |
+| ----------------- | ---------------------------- | ------------------------ |
+| ![desktop](screenshots/desktop.png) |  ![apps-spread](screenshots/apps-spread.png) | ![workspaces-spread](screenshots/workspaces-spread.png) |
+
 ## references
 
 Implementation was inspired by the combined behavior of Wayfire `scale` and `expo` plugins, but `spatial` intentionally keeps a slightly different unified interaction model tailored for this plugin.

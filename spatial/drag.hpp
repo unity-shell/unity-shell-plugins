@@ -18,8 +18,6 @@ class spread_t;
 class window_drag_t
 {
   public:
-    enum class result { dragged, window_click, empty_click };
-
     window_drag_t(wf::output_t *output, spread_t *spread,
         std::function<void (wayfire_toplevel_view, wf::point_t)> on_click,
         std::function<void ()> on_moved);
@@ -29,7 +27,9 @@ class window_drag_t
 
     void press();
     void motion();
-    result release();
+    /* Returns true if the release was an empty click -- no thumbnail was dragged
+     * or picked -- which the caller uses to dismiss the wall. */
+    bool release();
     void cancel();
     void forget(wayfire_toplevel_view view);
     bool active() const;

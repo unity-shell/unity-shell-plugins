@@ -36,7 +36,7 @@ struct window_drag_t::impl
     void drop(wayfire_toplevel_view v)
     {
         auto ctx    = make_frame_ctx(output);
-        auto target = coords::cell_at(ctx, ctx.cursor, WALL_GAP);
+        auto target = coords::cell_at(ctx, ctx.cursor);
         auto src    = output->wset()->get_view_main_workspace(v);
         if ((target.x != src.x) || (target.y != src.y))
         {
@@ -53,14 +53,14 @@ struct window_drag_t::impl
         auto thumb = spread->thumb_of(view);
         if ((thumb.width <= 0) || (thumb.height <= 0)) { return; }
 
-        wf::pointf_t rel = {(local.x - thumb.x) / (double) thumb.width,
-            (local.y - thumb.y) / (double) thumb.height};
+        wf::pointf_t rel = {(local.x - thumb.x) / thumb.width,
+            (local.y - thumb.y) / thumb.height};
 
         spread->release_for_drag(view);
 
         auto bbox = wf::view_bounding_box_up_to(view, "wobbly");
         wf::move_drag::drag_options_t opts;
-        opts.initial_scale = (double) bbox.width / std::max(1, thumb.width);
+        opts.initial_scale = bbox.width / thumb.width;
         drag->start_drag(view, rel, opts);
     }
 
@@ -76,17 +76,17 @@ struct window_drag_t::impl
         if (!pressed) { return; }
 
         auto cp = wf::get_core().get_cursor_position();
-        wf::point_t to{(int) cp.x, (int) cp.y};
+        wf::pointf_t to = cp;
 
         if (drag->view) { drag->handle_motion(to); return; }
         if (!drag->should_start_pending_drag(to)) { return; }
 
         auto lg = output->get_layout_geometry();
-        wf::pointf_t local{(double) (to.x - lg.x), (double) (to.y - lg.y)};
+        wf::pointf_t local{to.x - lg.x, to.y - lg.y};
         if (auto v = pick(local)) { start(v, local); drag->handle_motion(to); }
     }
 
-    window_drag_t::result release()
+    bool release()
     {
         pressed = false;
 
@@ -95,17 +95,17 @@ struct window_drag_t::impl
             auto v = drag->view;
             drag->handle_input_released();
             drop(v);
-            return window_drag_t::result::dragged;
+            return false;
         }
 
         auto ctx = make_frame_ctx(output);
         if (auto v = pick(ctx.cursor))
         {
-            on_click(v, coords::cell_at(ctx, ctx.cursor, WALL_GAP));
-            return window_drag_t::result::window_click;
+            on_click(v, coords::cell_at(ctx, ctx.cursor));
+            return false;
         }
 
-        return window_drag_t::result::empty_click;
+        return true;   /* empty click */
     }
 
     void cancel()
@@ -132,7 +132,7 @@ window_drag_t::~window_drag_t() = default;
 
 void window_drag_t::press() { priv->press(); }
 void window_drag_t::motion() { priv->motion(); }
-window_drag_t::result window_drag_t::release() { return priv->release(); }
+bool window_drag_t::release() { return priv->release(); }
 void window_drag_t::cancel() { priv->cancel(); }
 void window_drag_t::forget(wayfire_toplevel_view view) { priv->forget(view); }
 bool window_drag_t::active() const { return priv->active(); }

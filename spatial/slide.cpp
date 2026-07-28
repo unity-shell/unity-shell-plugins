@@ -42,18 +42,17 @@ void slide_t::update(double dx, double dy)
 
     const bool horiz = std::abs(accum_x) > std::abs(accum_y);
     const double mag  = horiz ? std::abs(accum_x) : std::abs(accum_y);
-    pan.hold(same(target, from) ? 0.0 : std::clamp(mag / SWIPE_DISTANCE, 0.0, 1.0));
+    pan.hold((target == from) ? 0.0 : std::clamp(mag / SWIPE_DISTANCE, 0.0, 1.0));
 }
 
 void slide_t::release()
 {
-    const bool commit = (pan.value() > 0.5) && !same(target, from);
-    pan.animate_to(pan.value(), commit ? 1.0 : 0.0);
+    pan.animate_to(pan.value(), committing() ? 1.0 : 0.0);
 }
 
 std::optional<wf::point_t> slide_t::finish()
 {
-    const bool commit = (pan.value() > 0.5) && !same(target, from);
+    const bool commit = committing();
     active_ = false;
     return commit ? std::optional<wf::point_t>(target) : std::nullopt;
 }

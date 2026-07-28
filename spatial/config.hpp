@@ -22,7 +22,14 @@ inline constexpr double PINCH_THRESHOLD = 0.25;
 inline constexpr int SPACING = 20;
 inline constexpr int OUTER_MARGIN = 36;
 inline constexpr int WALL_GAP = 12;
-inline constexpr float DIM_INACTIVE = 0.6f;
+/* Corner radius (logical px) of the wallpaper cards, matching GNOME's background
+ * panel (border-radius: 9px). Rounded per-pixel by an SDF shader (rounded.hpp). */
+inline constexpr int CARD_CORNER_RADIUS = 9;
+/* White focus ring on the current workspace card, after GNOME's background
+ * panel (shell/style.css): a solid ring set off by a small gap. Logical px,
+ * measured outward from the card edge. */
+inline constexpr float FOCUS_RING_GAP   = 4.0f;   /* transparent gap, card -> ring */
+inline constexpr float FOCUS_RING_WIDTH = 3.0f;   /* solid white ring */
 
 /**
  * Returns the configured wall gap tint for workspace spread rendering.
