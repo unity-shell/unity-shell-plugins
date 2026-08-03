@@ -191,7 +191,7 @@ void spread_t::render(const frame_ctx& ctx, const render_state& state)
         }
     }
 
-    if (backdrop) { backdrop->update(state.g, state.pan_dir, state.pan_amount); }
+    if (backdrop) { backdrop->update(state.g, state.pan_dir, state.pan_amount, state.sel); }
 }
 
 bool spread_t::animating()

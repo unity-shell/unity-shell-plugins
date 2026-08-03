@@ -23,10 +23,15 @@
 			<default>300ms circle</default>
 		</option>
 
-		<option name="gap-color" type="color">
-			<_short>Workspace wall gap color</_short>
-			<_long>Color filling the gaps between and around the workspace cells.</_long>
-			<default>0.239 0.239 0.239 1.0</default>
+		<option name="backdrop-color" type="color">
+			<_short>Backdrop color</_short>
+			<_long>Color filling the backdrop between and around the workspace cells.</_long>
+			<default>#3D3D3DFF</default>
+		</option>
+		<option name="active-cell-color" type="color">
+			<_short>Current workspace highlight color</_short>
+			<_long>Color of the ring around the current workspace card (e.g. the desktop accent).</_long>
+			<default>#FFFFFFFF</default>
 		</option>
 	</plugin>
 </wayfire>

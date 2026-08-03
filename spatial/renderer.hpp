@@ -26,6 +26,7 @@ struct render_state
     double      g = 0.0;
     wf::point_t pan_dir{0, 0};
     double      pan_amount = 0.0;
+    wf::point_t sel{0, 0};   /* keyboard-selected wall cell (seeded on wall entry) */
 };
 
 class backdrop_node_t;

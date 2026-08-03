@@ -1,8 +1,6 @@
 #include "rounded.hpp"
 #include "config.hpp"
 
-#include <algorithm>
-
 #include <wayfire/opengl.hpp>
 
 /*
@@ -57,7 +55,7 @@ void main() {
 }
 )";
 
-/* Focus ring: no texture, just a solid white rounded-rect band outside the card.
+/* Focus ring: no texture, a solid rounded-rect band around the card in `color`.
  * `d` is the signed distance to the card; the ring lives in [gap, gap+width].
  * `feather` (the AA half-width) is passed in physical px so the edge is equally
  * crisp at any output scale. */
@@ -77,6 +75,7 @@ uniform highp float gap;
 uniform highp float width;
 uniform highp float opacity;
 uniform highp float feather;
+uniform highp vec4 color;     /* straight-alpha RGBA */
 
 void main() {
     vec2 p = (uv - 0.5) * span;
@@ -86,14 +85,15 @@ void main() {
     float a = smoothstep(gap - feather, gap + feather, d) *
               (1.0 - smoothstep(gap + width - feather, gap + width + feather, d));
 
-    gl_FragColor = vec4(a * opacity);   /* premultiplied white */
+    float cov = a * opacity * color.a;
+    gl_FragColor = vec4(color.rgb * cov, cov);   /* premultiplied */
 }
 )";
 
 struct rounded_pass_t::impl
 {
-    OpenGL::program_t program;       /* rounded texture blit */
-    OpenGL::program_t ring;          /* focus ring */
+    OpenGL::program_t program;   /* rounded texture blit */
+    OpenGL::program_t ring;      /* rim / focus ring */
     bool compiled      = false;
     bool ring_compiled = false;
 };
@@ -178,10 +178,11 @@ void rounded_pass_t::render(wf::render_pass_t& pass, const wf::render_target_t& 
 }
 
 void rounded_pass_t::render_ring(wf::render_pass_t& pass, const wf::render_target_t& target,
-    const wf::geometry_t& box, float radius, float opacity, const wf::regionf_t& damage)
+    const wf::geometry_t& box, float radius, float gap, float width, float opacity,
+    const wf::color_t& color, const wf::regionf_t& damage)
 {
-    /* Expand the quad outward far enough to hold the gap + ring (+AA). */
-    const float ext = FOCUS_RING_GAP + FOCUS_RING_WIDTH + 2.0f;
+    /* Expand the quad outward far enough to hold the gap + band (+AA). */
+    const float ext = gap + width + 2.0f;
     const float x = (float) box.x - ext, y = (float) box.y - ext;
     const float w = (float) box.width + 2.0f * ext, h = (float) box.height + 2.0f * ext;
 
@@ -198,10 +199,12 @@ void rounded_pass_t::render_ring(wf::render_pass_t& pass, const wf::render_targe
         priv->ring.uniform2f("span", w, h);
         priv->ring.uniform2f("half_box", (float) box.width * 0.5f, (float) box.height * 0.5f);
         priv->ring.uniform1f("radius", radius);
-        priv->ring.uniform1f("gap", FOCUS_RING_GAP);
-        priv->ring.uniform1f("width", FOCUS_RING_WIDTH);
+        priv->ring.uniform1f("gap", gap);
+        priv->ring.uniform1f("width", width);
         priv->ring.uniform1f("opacity", opacity);
         priv->ring.uniform1f("feather", feather);
+        priv->ring.uniform4f("color",
+            glm::vec4((float) color.r, (float) color.g, (float) color.b, (float) color.a));
     });
 }
 }

@@ -27,6 +27,24 @@ struct scoped_flag
     explicit scoped_flag(bool& f) : flag(f) { flag = true; }
     ~scoped_flag() { flag = false; }
 };
+
+/* The workspace one arrow-key step from `from`, clamped to the grid. Returns
+ * `from` unchanged for any non-arrow key or a step off the edge. */
+wf::point_t arrow_neighbor(wf::point_t from, uint32_t keycode, wf::dimensions_t grid)
+{
+    wf::point_t to = from;
+    switch (keycode)
+    {
+      case KEY_LEFT:  to.x -= 1; break;
+      case KEY_RIGHT: to.x += 1; break;
+      case KEY_UP:    to.y -= 1; break;
+      case KEY_DOWN:  to.y += 1; break;
+      default: return from;
+    }
+    to.x = std::clamp(to.x, 0, grid.width - 1);
+    to.y = std::clamp(to.y, 0, grid.height - 1);
+    return to;
+}
 }
 
 /* Cross-output inhibit reference count used by IPC hooks. */
@@ -127,6 +145,9 @@ void controller::set_stage(stage s)
     /* Filter clears on the transition back to desktop, so each spread opens
      * unfiltered; only spread_app sets it. */
     if (s == stage::desktop) { filter.clear(); }
+    /* Entering the wall seeds the selection on the current workspace; the ring
+     * starts there and the arrows move it from a known-valid cell. */
+    if (s == stage::workspaces_spread) { sel = output->wset()->get_current_workspace(); }
     cur = s;
 }
 
@@ -140,7 +161,8 @@ void controller::render_frame()
 {
     render_state rs;
     auto ctx = make_frame_ctx(output);
-    rs.g = g_axis.value();
+    rs.g   = g_axis.value();
+    rs.sel = sel;
     /* Feed the panel from the visible axis, so an opening/closing animation is
      * reflected live (the input stage `cur` holds its destination and would lag). */
     publish_stage(stage_at(rs.g, published));
@@ -155,6 +177,12 @@ void controller::render_frame()
     }
 
     spread->render(ctx, rs);
+}
+
+void controller::repaint()
+{
+    render_frame();
+    output->render->schedule_redraw();
 }
 
 void controller::advance()
@@ -201,19 +229,19 @@ void controller::settle_to(double target)
     set_hook();
 }
 
+bool controller::can_relayout()
+{
+    /* The spread sits settled and idle: no gesture or settle animation on the
+     * axis, no slide, no self-activation close, and no thumbnail drag. Reflowing
+     * outside this window would fight motion that is already in flight. */
+    return (cur != stage::desktop) && !g_axis.active() && !slide->active() &&
+        !self_activating && !(drag && drag->active());
+}
+
 void controller::relayout_if_idle()
 {
-    /* Reflow when a window resizes or the workarea changes while the spread sits
-     * settled. Skip while a gesture, slide, stage animation, our own window
-     * activation, or a thumbnail drag is driving geometry, so we never fight
-     * motion that is already in flight. */
-    if ((cur == stage::desktop) || gesturing || slide->active() || self_activating ||
-        g_axis.active() || (drag && drag->active()))
-    {
-        return;
-    }
-
-    relayout();
+    /* Reflow when a window resizes or the workarea changes while settled. */
+    if (can_relayout()) { relayout(); }
 }
 
 void controller::relayout(bool animate)
@@ -224,8 +252,7 @@ void controller::relayout(bool animate)
      * running so that easing is drawn when the spread is otherwise settled. */
     if (!g_axis.active() && !slide->active() && spread->animating()) { set_hook(); }
 
-    render_frame();
-    output->render->schedule_redraw();
+    repaint();
 }
 
 void controller::activate_window(wayfire_toplevel_view v, wf::point_t ws)
@@ -242,9 +269,8 @@ void controller::activate_window(wayfire_toplevel_view v, wf::point_t ws)
 void controller::end_to_desktop()
 {
     if (slide) { slide->cancel(); }
-    gesturing = false;
     if (drag) { drag->cancel(); }
-    g_axis.pin(0.0);
+    g_axis.pin(0.0);   /* clears the axis interacting/animating state */
     set_stage(stage::desktop);
     publish_stage(stage::desktop);  /* this path unhooks, so no render frame will publish */
     apply_resources();
@@ -260,8 +286,7 @@ void controller::recenter_apps_spread()
      * not move them -- relayout re-computes for the new current workspace and
      * the slots ease from where they already are (a no-op), with no snap. */
     spread->layout(make_frame_ctx(output), filter, /*animate=*/true);
-    render_frame();
-    output->render->schedule_redraw();
+    repaint();
     g_axis.pin(1.0);
     set_stage(stage::apps_spread);
     set_hook();
@@ -334,7 +359,6 @@ void controller::finish_slide()
 
 void controller::gesture_begin(int fingers)
 {
-    gesturing = false;
     if (inhibited() || !cursor_here()) { return; }
 
     if (fingers == 4)
@@ -362,15 +386,14 @@ void controller::gesture_begin(int fingers)
 
     const double lo = std::max(0.0, anchor - 1.0);
     const double hi = std::min(2.0, anchor + 1.0);
-    g_axis.begin(from, lo, hi);
-    gesturing = true;
+    g_axis.begin(from, lo, hi);   /* marks the axis interacting until settle */
     set_hook();
 }
 
 void controller::gesture_update(double dx, double dy)
 {
     if (slide->active()) { slide_update(dx, dy); return; }
-    if (!gesturing) { return; }
+    if (!g_axis.interacting_now()) { return; }
 
     g_axis.drive(-dy / SWIPE_DISTANCE);
 
@@ -385,10 +408,9 @@ void controller::gesture_update(double dx, double dy)
 void controller::gesture_end(double, double vy)
 {
     if (slide->active()) { slide_end(); return; }
-    if (!gesturing) { return; }
+    if (!g_axis.interacting_now()) { return; }
 
-    gesturing = false;
-    g_axis.settle(vy);
+    g_axis.settle(vy);   /* ends the interacting state and animates to a stage */
     set_hook();
 }
 
@@ -456,27 +478,35 @@ void controller::handle_keyboard_key(wf::seat_t*, wlr_keyboard_key_event ev)
 {
     if ((ev.state != WL_KEYBOARD_KEY_STATE_PRESSED) || (cur == stage::desktop)) { return; }
 
+    /* Esc dismisses either spread. On the wall the arrows only move `sel`, never
+     * the workspace, so this settles back onto the workspace we opened from. */
     if (ev.keycode == KEY_ESC) { settle_to(0.0); return; }
 
-    /* The grab owns the keyboard, so the compositor's workspace-switch binds
-     * can't reach it; arrow keys move to the neighbour and stay in the spread
-     * (the backdrop is kept across the relayout, so the desktop never blinks). */
-    auto cur_ws = output->wset()->get_current_workspace();
-    auto dims   = output->wset()->get_workspace_grid_size();
-    wf::point_t to = cur_ws;
-    switch (ev.keycode)
+    auto grid = output->wset()->get_workspace_grid_size();
+
+    if (cur == stage::workspaces_spread)
     {
-      case KEY_LEFT:  to.x -= 1; break;
-      case KEY_RIGHT: to.x += 1; break;
-      case KEY_UP:    to.y -= 1; break;
-      case KEY_DOWN:  to.y += 1; break;
-      default: return;
+        /* Wall: select then commit. Arrows move the ring over the static wall;
+         * Enter/Space enter the selected cell (mirrors clicking it). */
+        if ((ev.keycode == KEY_ENTER) || (ev.keycode == KEY_KPENTER) || (ev.keycode == KEY_SPACE))
+        {
+            output->wset()->set_workspace(sel);
+            settle_to(0.0);
+            return;
+        }
+
+        auto to = arrow_neighbor(sel, ev.keycode, grid);
+        if (to == sel) { return; }
+        sel = to;
+        repaint();
+        return;
     }
 
-    to.x = std::clamp(to.x, 0, dims.width - 1);
-    to.y = std::clamp(to.y, 0, dims.height - 1);
+    /* App spread shows one workspace, so arrows switch it live and re-lay-out in
+     * place (the backdrop is kept across the relayout, so the desktop never blinks). */
+    auto cur_ws = output->wset()->get_current_workspace();
+    auto to = arrow_neighbor(cur_ws, ev.keycode, grid);
     if (to == cur_ws) { return; }
-
     output->wset()->set_workspace(to);
     deferred.arm(output, [this] { relayout(); });
 }
@@ -490,7 +520,7 @@ void controller::handle_mapped(wf::view_mapped_signal *ev)
 {
     if ((cur == stage::desktop) && !slide->active()) { return; }
     if (!wf::toplevel_cast(ev->view)) { return; }
-    if (!gesturing && !slide->active() && !g_axis.animating()) { relayout(); }
+    relayout_if_idle();
 }
 
 void controller::handle_unmapped(wf::view_unmapped_signal *ev)
@@ -501,7 +531,7 @@ void controller::handle_unmapped(wf::view_unmapped_signal *ev)
 
     drag->forget(v);
     spread->forget(v);
-    if (!gesturing && !slide->active() && !g_axis.animating()) { relayout(); }
+    relayout_if_idle();
 }
 
 void controller::handle_focus_request(wf::view_focus_request_signal *ev)

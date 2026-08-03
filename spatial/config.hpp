@@ -22,21 +22,27 @@ inline constexpr double PINCH_THRESHOLD = 0.25;
 inline constexpr int SPACING = 20;
 inline constexpr int OUTER_MARGIN = 36;
 inline constexpr int WALL_GAP = 12;
-/* Corner radius (logical px) of the wallpaper cards, matching GNOME's background
- * panel (border-radius: 9px). Rounded per-pixel by an SDF shader (rounded.hpp). */
 inline constexpr int CARD_CORNER_RADIUS = 9;
-/* White focus ring on the current workspace card, after GNOME's background
- * panel (shell/style.css): a solid ring set off by a small gap. Logical px,
- * measured outward from the card edge. */
-inline constexpr float FOCUS_RING_GAP   = 4.0f;   /* transparent gap, card -> ring */
-inline constexpr float FOCUS_RING_WIDTH = 3.0f;   /* solid white ring */
+/* Focus ring on the current workspace card, set off from its edge by a gap. */
+inline constexpr float FOCUS_RING_GAP   = 4.0f;
+inline constexpr float FOCUS_RING_WIDTH = 3.0f;
 
 /**
- * Returns the configured wall gap tint for workspace spread rendering.
+ * Backdrop color filling the gaps between and around the workspace cells.
  */
-inline wf::color_t wall_gap_color()
+inline wf::color_t backdrop_color()
 {
-    static wf::option_wrapper_t<wf::color_t> opt{"spatial/gap-color"};
+    static wf::option_wrapper_t<wf::color_t> opt{"spatial/backdrop-color"};
+    return opt;
+}
+
+/**
+ * Highlight color for the current workspace cell's ring (default white; the
+ * shell can map the desktop accent onto spatial/active-cell-color).
+ */
+inline wf::color_t active_cell_color()
+{
+    static wf::option_wrapper_t<wf::color_t> opt{"spatial/active-cell-color"};
     return opt;
 }
 }

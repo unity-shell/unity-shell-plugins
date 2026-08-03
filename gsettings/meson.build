@@ -14,6 +14,8 @@ schema = custom_target('wayfire-gschema',
   command: [gen, '@OUTPUT@',
     meson.project_source_root() / 'wayfire' / 'metadata',
     meson.project_source_root() / 'spatial'],
+  depend_files: files(
+    meson.project_source_root() / 'spatial' / 'spatial.xml'),
   build_by_default: true,
   install: true,
   install_dir: get_option('datadir') / 'glib-2.0' / 'schemas')

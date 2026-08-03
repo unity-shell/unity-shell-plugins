@@ -135,7 +135,7 @@ class backdrop_node_t : public wf::scene::node_t
 
         void render(const wf::scene::render_instruction_t& data) override
         {
-            data.pass->clear(data.damage, wall_gap_color());
+            data.pass->clear(data.damage, backdrop_color());
 
             auto ctx = make_frame_ctx(self->output);
             const auto bufsz = self->buffer.get_size();
@@ -171,10 +171,12 @@ class backdrop_node_t : public wf::scene::node_t
                     self->rounder.render(*data.pass, data.target, tex, card,
                         (float) CARD_CORNER_RADIUS, data.damage, uv_scale, uv_off);
 
-                    if ((ring > 0.0f) && (i == ctx.cur_ws.x) && (j == ctx.cur_ws.y))
+                    /* Ring the keyboard-selected cell (seeded on the current one). */
+                    if ((ring > 0.0f) && (i == self->sel.x) && (j == self->sel.y))
                     {
                         self->rounder.render_ring(*data.pass, data.target, card,
-                            (float) CARD_CORNER_RADIUS, ring, data.damage);
+                            (float) CARD_CORNER_RADIUS, FOCUS_RING_GAP, FOCUS_RING_WIDTH,
+                            ring, active_cell_color(), data.damage);
                     }
                 }
             }
@@ -192,6 +194,7 @@ class backdrop_node_t : public wf::scene::node_t
     double g = 0.0;
     wf::point_t  pan_dir{0, 0};
     double       pan_amount = 0.0;
+    wf::point_t  sel{0, 0};   /* keyboard-selected wall cell (seeded on wall entry) */
     std::shared_ptr<wallpaper_stream_t> stream;
     wf::auxilliary_buffer_t buffer;
     wf::regionf_t bg_damage;
@@ -206,11 +209,12 @@ class backdrop_node_t : public wf::scene::node_t
         bg_damage |= bbox;
     }
 
-    void update(double g_, wf::point_t dir, double amount)
+    void update(double g_, wf::point_t dir, double amount, wf::point_t sel_)
     {
         g = g_;
         pan_dir = dir;
         pan_amount = amount;
+        sel = sel_;
         wf::scene::damage_node(shared_from_this(), get_bounding_box());
     }
 

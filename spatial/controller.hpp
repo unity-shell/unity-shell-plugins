@@ -117,6 +117,7 @@ class controller : public wf::per_output_plugin_instance_t,
     void apply_resources();
     void publish_stage(stage s);   /* emit spatial/stage# for the panel; deduped by `published` */
     void render_frame();
+    void repaint();   /* render this frame now and schedule the next */
     void advance();
     void set_hook();
     void unhook();
@@ -135,6 +136,7 @@ class controller : public wf::per_output_plugin_instance_t,
     void handle_unmapped(wf::view_unmapped_signal *ev);
     void handle_focus_request(wf::view_focus_request_signal *ev);
     void relayout_if_idle();
+    bool can_relayout();   /* the spread sits settled: safe to reflow without fighting motion */
     bool cursor_here() const;
 
     std::unique_ptr<spread_t> spread;
@@ -147,11 +149,11 @@ class controller : public wf::per_output_plugin_instance_t,
 
     stage cur = stage::desktop;         /* input stage: latched, holds through a settle */
     stage published = stage::desktop;   /* last stage sent to the panel: tracks the visible g */
+    wf::point_t sel{0, 0};              /* keyboard-selected wall cell (seeded on wall entry) */
 
     std::optional<toggled> t_activate, t_top, t_grab, t_hooks;
 
     std::vector<std::string> filter;
-    bool   gesturing = false;
     bool   self_activating = false;
 
     wf::effect_hook_t pre_hook  = [this] { render_frame(); };

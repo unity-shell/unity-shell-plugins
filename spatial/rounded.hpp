@@ -4,6 +4,7 @@
 
 #include <wayfire/geometry.hpp>
 #include <wayfire/render.hpp>
+#include <wayfire/config/types.hpp>
 
 namespace spatial
 {
@@ -38,15 +39,13 @@ class rounded_pass_t
         const wf::pointf_t& uv_scale = {1.0, 1.0}, const wf::pointf_t& uv_off = {0.0, 0.0});
 
     /**
-     * Draw a white focus ring hugging @box (a rounded rect of corner @radius),
-     * just outside its edge: a solid ring set off by a gap, plus a soft glow
-     * (see FOCUS_RING_* in config.hpp). @opacity scales the whole ring in (for
-     * the wall fade-in). Same SDF technique as render(), so it is crisp and
-     * anti-aliased at any scale.
+     * Draw a rounded-rect ring around @box (corner @radius) in @color: a stroke
+     * of @width logical px starting @gap px outside the card edge, at @opacity.
+     * Crisp, scale-independent SDF.
      */
     void render_ring(wf::render_pass_t& pass, const wf::render_target_t& target,
-        const wf::geometry_t& box, float radius, float opacity,
-        const wf::regionf_t& damage);
+        const wf::geometry_t& box, float radius, float gap, float width,
+        float opacity, const wf::color_t& color, const wf::regionf_t& damage);
 
   private:
     struct impl;
