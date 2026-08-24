@@ -3,7 +3,6 @@ name: build
 on:
   push:
     branches: [main]
-  pull_request:
 
 concurrency:
   group: build-${{ github.ref }}
@@ -17,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
 
     container:
-      image: ghcr.io/unity-shell/ci/wayfire:v0.11.0
+      image: ghcr.io/unity-desktop/ci:latest
 
     steps:
       - uses: actions/checkout@v7
