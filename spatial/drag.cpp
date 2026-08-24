@@ -1,6 +1,6 @@
 #include "drag.hpp"
-#include "renderer.hpp"
-#include "coords.hpp"
+#include "present.hpp"
+#include "geometry.hpp"
 #include "config.hpp"
 
 #include <algorithm>
@@ -15,93 +15,92 @@
 
 namespace spatial
 {
-/* Internal drag engine integrating spread thumbnails with move-drag core API. */
+/* Drag engine that ties spread thumbnails to the move-drag core API. */
 struct window_drag_t::impl
 {
     wf::output_t *output;
-    spread_t *spread;
+    present_t *present;
     std::function<void (wayfire_toplevel_view, wf::point_t)> on_click;
     std::function<void ()> on_moved;
     bool pressed = false;
-    wf::shared_data::ref_ptr_t<wf::move_drag::core_drag_t> drag;
+    wf::shared_data::ref_ptr_t<wf::move_drag::core_drag_t> core;
 
-    impl(wf::output_t *o, spread_t *s,
-        std::function<void (wayfire_toplevel_view, wf::point_t)> click,
-        std::function<void ()> moved) :
-        output(o), spread(s), on_click(std::move(click)), on_moved(std::move(moved))
+    impl(wf::output_t *output, present_t *present,
+        std::function<void (wayfire_toplevel_view, wf::point_t)> on_click,
+        std::function<void ()> on_moved) :
+        output(output), present(present),
+        on_click(std::move(on_click)), on_moved(std::move(on_moved))
     {}
 
-    wayfire_toplevel_view pick(wf::pointf_t local) { return spread->view_at(local); }
+    wayfire_toplevel_view pick(wf::pointf_t at) { return present->view_at(at); }
 
-    void drop(wayfire_toplevel_view v)
+    void drop(wayfire_toplevel_view view)
     {
-        auto ctx    = make_frame_ctx(output);
-        auto target = coords::cell_at(ctx, ctx.cursor);
-        auto src    = output->wset()->get_view_main_workspace(v);
-        if ((target.x != src.x) || (target.y != src.y))
+        auto ctx    = make_world(output);
+        auto target = geom::cell_at(ctx, ctx.cursor);
+        auto source = output->wset()->get_view_main_workspace(view);
+        if ((target.x != source.x) || (target.y != source.y))
         {
-            auto g = v->get_geometry();
-            v->move(g.x + (target.x - src.x) * ctx.output.width,
-                g.y + (target.y - src.y) * ctx.output.height);
+            auto view_geo = view->get_geometry();
+            view->move(view_geo.x + (target.x - source.x) * ctx.output.width,
+                view_geo.y + (target.y - source.y) * ctx.output.height);
         }
 
         on_moved();
     }
 
-    void start(wayfire_toplevel_view view, wf::pointf_t local)
+    void start(wayfire_toplevel_view view, wf::pointf_t at)
     {
-        auto thumb = spread->thumb_of(view);
+        auto thumb = present->thumb_of(view);
         if ((thumb.width <= 0) || (thumb.height <= 0)) { return; }
 
-        wf::pointf_t rel = {(local.x - thumb.x) / thumb.width,
-            (local.y - thumb.y) / thumb.height};
+        wf::pointf_t grab_offset = {(at.x - thumb.x) / thumb.width,
+            (at.y - thumb.y) / thumb.height};
 
-        spread->release_for_drag(view);
+        present->release_for_drag(view);
 
         auto bbox = wf::view_bounding_box_up_to(view, "wobbly");
         wf::move_drag::drag_options_t opts;
         opts.initial_scale = bbox.width / thumb.width;
-        drag->start_drag(view, rel, opts);
+        core->start_drag(view, grab_offset, opts);
     }
 
     void press()
     {
-        if (drag->view) { drag->handle_input_released(); }
+        if (core->view) { core->handle_input_released(); }
         pressed = true;
-        drag->set_pending_drag(wf::get_core().get_cursor_position());
+        core->set_pending_drag(wf::get_core().get_cursor_position());
     }
 
     void motion()
     {
         if (!pressed) { return; }
 
-        auto cp = wf::get_core().get_cursor_position();
-        wf::pointf_t to = cp;
+        auto cursor = wf::get_core().get_cursor_position();
+        if (core->view) { core->handle_motion(cursor); return; }
+        if (!core->should_start_pending_drag(cursor)) { return; }
 
-        if (drag->view) { drag->handle_motion(to); return; }
-        if (!drag->should_start_pending_drag(to)) { return; }
-
-        auto lg = output->get_layout_geometry();
-        wf::pointf_t local{to.x - lg.x, to.y - lg.y};
-        if (auto v = pick(local)) { start(v, local); drag->handle_motion(to); }
+        auto layout_geo = output->get_layout_geometry();
+        wf::pointf_t local_point{cursor.x - layout_geo.x, cursor.y - layout_geo.y};
+        if (auto view = pick(local_point)) { start(view, local_point); core->handle_motion(cursor); }
     }
 
     bool release()
     {
         pressed = false;
 
-        if (drag->view)
+        if (core->view)
         {
-            auto v = drag->view;
-            drag->handle_input_released();
-            drop(v);
+            auto view = core->view;
+            core->handle_input_released();
+            drop(view);
             return false;
         }
 
-        auto ctx = make_frame_ctx(output);
-        if (auto v = pick(ctx.cursor))
+        auto ctx = make_world(output);
+        if (auto view = pick(ctx.cursor))
         {
-            on_click(v, coords::cell_at(ctx, ctx.cursor));
+            on_click(view, geom::cell_at(ctx, ctx.cursor));
             return false;
         }
 
@@ -111,21 +110,21 @@ struct window_drag_t::impl
     void cancel()
     {
         pressed = false;
-        if (drag->view) { drag->handle_input_released(); }
+        if (core->view) { core->handle_input_released(); }
     }
 
     void forget(wayfire_toplevel_view view)
     {
-        if (drag->view == view) { cancel(); }
+        if (core->view == view) { cancel(); }
     }
 
-    bool active() { return drag->view != nullptr; }
+    bool active() { return core->view != nullptr; }
 };
 
-window_drag_t::window_drag_t(wf::output_t *output, spread_t *spread,
+window_drag_t::window_drag_t(wf::output_t *output, present_t *present,
     std::function<void (wayfire_toplevel_view, wf::point_t)> on_click,
     std::function<void ()> on_moved) :
-    priv(std::make_unique<impl>(output, spread, std::move(on_click), std::move(on_moved)))
+    priv(std::make_unique<impl>(output, present, std::move(on_click), std::move(on_moved)))
 {}
 
 window_drag_t::~window_drag_t() = default;

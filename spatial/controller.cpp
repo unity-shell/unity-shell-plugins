@@ -1,7 +1,6 @@
 #include "controller.hpp"
 
-#include <algorithm>
-#include <cmath>
+#include <utility>
 
 #include <linux/input-event-codes.h>
 
@@ -20,31 +19,13 @@ namespace spatial
 {
 namespace
 {
-/* Sets a flag for the duration of a scope (exception-safe, always cleared). */
+/* Scope guard for self_activating: blocks the re-entrant focus_request dismiss. */
 struct scoped_flag
 {
     bool& flag;
     explicit scoped_flag(bool& f) : flag(f) { flag = true; }
     ~scoped_flag() { flag = false; }
 };
-
-/* The workspace one arrow-key step from `from`, clamped to the grid. Returns
- * `from` unchanged for any non-arrow key or a step off the edge. */
-wf::point_t arrow_neighbor(wf::point_t from, uint32_t keycode, wf::dimensions_t grid)
-{
-    wf::point_t to = from;
-    switch (keycode)
-    {
-      case KEY_LEFT:  to.x -= 1; break;
-      case KEY_RIGHT: to.x += 1; break;
-      case KEY_UP:    to.y -= 1; break;
-      case KEY_DOWN:  to.y += 1; break;
-      default: return from;
-    }
-    to.x = std::clamp(to.x, 0, grid.width - 1);
-    to.y = std::clamp(to.y, 0, grid.height - 1);
-    return to;
-}
 }
 
 /* Cross-output inhibit reference count used by IPC hooks. */
@@ -53,16 +34,20 @@ bool controller::inhibited() { return s_inhibit > 0; }
 void controller::inhibit() { s_inhibit++; }
 void controller::uninhibit() { if (s_inhibit > 0) { s_inhibit--; } }
 
+void controller::reflow_for_inset() { relayout_if_idle(); }
+
 void controller::init()
 {
-    spread = std::make_unique<spread_t>(output);
-    drag = std::make_unique<window_drag_t>(output, spread.get(),
-        [this] (wayfire_toplevel_view v, wf::point_t ws) { activate_window(v, ws); },
+    present = std::make_unique<present_t>(output);
+    drag = std::make_unique<window_drag_t>(output, present.get(),
+        [this] (wayfire_toplevel_view view, wf::point_t ws) { activate_window(view, ws); },
         /* Snap after a drop: the thumbnail is already at the drop point, so
          * animating its slot would fling it back from the source cell. */
         [this] { relayout(false); });
     grab = std::make_unique<wf::input_grab_t>(PLUGIN_NAME, output, this, this, nullptr);
     slide = std::make_unique<slide_t>(output);
+
+    input = std::make_unique<interaction>(this, present.get(), drag.get());
 
     t_activate.emplace(
         [this] { output->activate_plugin(&grab_interface); },
@@ -93,10 +78,10 @@ void controller::init()
     output->connect(&on_view_mapped);
     output->connect(&on_workarea_changed);
 
-    swipe.on_begin  = [this] (int f) { gesture_begin(f); };
+    swipe.on_begin  = [this] (int fingers) { gesture_begin(fingers); };
     swipe.on_update = [this] (double dx, double dy) { gesture_update(dx, dy); };
     swipe.on_end    = [this] (double vx, double vy) { gesture_end(vx, vy); };
-    swipe.on_pinch  = [this] (int f, double s) { gesture_pinch(f, s); };
+    swipe.on_pinch  = [this] (int fingers, double scale) { gesture_pinch(fingers, scale); };
 }
 
 void controller::fini()
@@ -110,73 +95,57 @@ void controller::fini()
 
 void controller::apply_resources()
 {
-    /* The overview needs its resources whenever it is visible: any non-desktop
-     * stage, or an active slide (which pans the spread even from the desktop).
-     * This keeps a single resource path (no hand-forcing in begin_slide). */
-    const bool apps_spread = (cur != stage::desktop) || (slide && slide->active());
-    auto w = resources_for(apps_spread ? stage::apps_spread : stage::desktop);
-    t_activate->ensure(w.activated);
-    t_top->ensure(w.top);
-    t_grab->ensure(w.grabbed);
-    if (w.overlay) { spread->ensure_layout(make_frame_ctx(output), filter); }
-    else { spread->clear(); }
+    /* Held whenever visible: any non-desktop phase, or an active slide. */
+    const bool overview = (current != phase::desktop) || (slide && slide->active());
+    t_activate->ensure(overview);
+    t_top->ensure(overview);
+    t_grab->ensure(overview);
+    if (overview) { present->ensure_layout(make_world(output), filter); }
+    else { present->clear(); }
 }
 
-void controller::publish_stage(stage s)
+void controller::publish_phase(phase stage)
 {
-    /* Broadcast the visible stage as an ipc-rules event for the panel clients.
-     * Driven by the on-screen g (see render_frame), so the panel tracks an
-     * opening/closing animation live rather than the latched input stage. */
-    if (s == published) { return; }
-    published = s;
-
-    const char *name =
-        (s == stage::apps_spread)       ? "apps_spread" :
-        (s == stage::workspaces_spread) ? "workspaces_spread" : "desktop";
+    /* Driven by the visible g, so the panel tracks the animation, not the
+     * latched phase. */
+    if (stage == published) { return; }
+    published = stage;
 
     wf::json_t data;
-    data["stage"] = name;
+    data["stage"] = phase_name(stage);
     wf::ipc_rules::send_event_to_subscribes(data, "spatial/stage#");
 }
 
-void controller::set_stage(stage s)
+void controller::set_phase(phase stage)
 {
-    if (s == cur) { return; }
-    /* Filter clears on the transition back to desktop, so each spread opens
-     * unfiltered; only spread_app sets it. */
-    if (s == stage::desktop) { filter.clear(); }
-    /* Entering the wall seeds the selection on the current workspace; the ring
-     * starts there and the arrows move it from a known-valid cell. */
-    if (s == stage::workspaces_spread) { sel = output->wset()->get_current_workspace(); }
-    cur = s;
+    if (stage == current) { return; }
+    /* Each spread opens unfiltered. Only spread_app sets the filter. */
+    if (stage == phase::desktop) { filter.clear(); }
+    if (stage == phase::wall) { input->seed(output->wset()->get_current_workspace()); }
+    current = stage;
 }
 
 void controller::reconcile()
 {
-    set_stage(stage_at(g_axis.value(), cur));
+    set_phase(phase_of(g_axis.value(), current));
     apply_resources();
 }
 
 void controller::render_frame()
 {
-    render_state rs;
-    auto ctx = make_frame_ctx(output);
-    rs.g   = g_axis.value();
-    rs.sel = sel;
-    /* Feed the panel from the visible axis, so an opening/closing animation is
-     * reflected live (the input stage `cur` holds its destination and would lag). */
-    publish_stage(stage_at(rs.g, published));
+    auto ctx = make_world(output);
+    const double g = g_axis.value();
+    publish_phase(phase_of(g, published));
+
+    wf::point_t pan_dir{0, 0};
+    double pan_amount = 0.0;
     if (slide->active())
     {
-        rs.pan_dir    = slide->pan_dir();
-        rs.pan_amount = slide->pan_amount();
-    } else
-    {
-        rs.pan_dir    = {0, 0};
-        rs.pan_amount = 0;
+        pan_dir    = slide->pan_dir();
+        pan_amount = slide->pan_amount();
     }
 
-    spread->render(ctx, rs);
+    present->render(ctx, g, pan_dir, pan_amount, input->selection());
 }
 
 void controller::repaint()
@@ -197,17 +166,16 @@ void controller::advance()
     if (g_axis.interacting_now()) { output->render->schedule_redraw(); return; }
     if (g_axis.animating())
     {
-        /* A settle holds the destination stage it started with; don't re-derive
-         * from the in-flight g (that would bounce an opening spread to desktop at
-         * g~0). Just keep resources live and frames coming. */
+        /* A settle holds its destination. Re-deriving from the in-flight g would
+         * bounce an opening spread back to desktop near g == 0. */
         apply_resources();
         output->render->schedule_redraw();
         return;
     }
 
-    /* Settle finished: latch the final stage from where g landed. */
+    /* Settle done: latch the phase from where g landed. */
     reconcile();
-    if (spread->animating()) { output->render->schedule_redraw(); return; }
+    if (present->animating()) { output->render->schedule_redraw(); return; }
     unhook();
 }
 
@@ -216,12 +184,11 @@ void controller::unhook()   { t_hooks->ensure(false); }
 
 void controller::settle_to(double target)
 {
-    /* Open/switch (target > 0): enter the destination stage now so there's a live
-     * spread to animate into; advance holds it for the animation. Close (target 0)
-     * keeps the current stage until g reaches desktop, so it stays visible. */
+    /* Opening: enter the destination phase now so there's a spread to animate
+     * into. Closing keeps the phase until g reaches desktop, so it stays visible. */
     if (target > 0.0)
     {
-        set_stage(target >= 2.0 ? stage::workspaces_spread : stage::apps_spread);
+        set_phase(target >= 2.0 ? phase::wall : phase::apps);
         apply_resources();
     }
 
@@ -231,76 +198,79 @@ void controller::settle_to(double target)
 
 bool controller::can_relayout()
 {
-    /* The spread sits settled and idle: no gesture or settle animation on the
-     * axis, no slide, no self-activation close, and no thumbnail drag. Reflowing
-     * outside this window would fight motion that is already in flight. */
-    return (cur != stage::desktop) && !g_axis.active() && !slide->active() &&
+    /* Settled and idle. Reflowing mid-motion would fight it. */
+    return (current != phase::desktop) && !g_axis.active() && !slide->active() &&
         !self_activating && !(drag && drag->active());
 }
 
 void controller::relayout_if_idle()
 {
-    /* Reflow when a window resizes or the workarea changes while settled. */
     if (can_relayout()) { relayout(); }
 }
 
 void controller::relayout(bool animate)
 {
-    spread->layout(make_frame_ctx(output), filter, animate);
+    present->layout(make_world(output), filter, animate);
 
-    /* The slots ease toward their new targets on their own; keep the frame loop
-     * running so that easing is drawn when the spread is otherwise settled. */
-    if (!g_axis.active() && !slide->active() && spread->animating()) { set_hook(); }
+    /* Keep the loop running so the slots' easing is drawn when otherwise settled. */
+    if (!g_axis.active() && !slide->active() && present->animating()) { set_hook(); }
 
     repaint();
 }
 
-void controller::activate_window(wayfire_toplevel_view v, wf::point_t ws)
+void controller::activate_window(wayfire_toplevel_view view, wf::point_t ws)
 {
-    /* Suppress the external-activation dismissal for our own focus_request and
-     * workspace switch; settle_to(0.0) already closes the spread here. */
-    scoped_flag guard{self_activating};
-    if (v->minimized) { wf::get_core().default_wm->minimize_request(v, false); }
-    wf::get_core().default_wm->focus_request(v);
+    scoped_flag guard{self_activating};   /* our own focus_request must not dismiss us */
+    if (view->minimized) { wf::get_core().default_wm->minimize_request(view, false); }
+    wf::get_core().default_wm->focus_request(view);
+    enter_workspace(ws);
+}
+
+void controller::enter_workspace(wf::point_t ws)
+{
     output->wset()->set_workspace(ws);
     settle_to(0.0);
+}
+
+void controller::switch_workspace(wf::point_t ws)
+{
+    /* Slide to the neighbour like a 4-finger slide; finish_slide commits it. */
+    slide->start_to(ws);
+    apply_resources();
+    set_hook();
 }
 
 void controller::end_to_desktop()
 {
     if (slide) { slide->cancel(); }
     if (drag) { drag->cancel(); }
-    g_axis.pin(0.0);   /* clears the axis interacting/animating state */
-    set_stage(stage::desktop);
-    publish_stage(stage::desktop);  /* this path unhooks, so no render frame will publish */
+    g_axis.pin(0.0);
+    set_phase(phase::desktop);
+    publish_phase(phase::desktop);  /* this path unhooks, so no frame will publish it */
     apply_resources();
     unhook();
-
-    deferred.cancel();
 }
 
 void controller::recenter_apps_spread()
 {
     slide->cancel();
-    /* Slots are cell-local (see renderer place()), so the workspace switch does
-     * not move them -- relayout re-computes for the new current workspace and
-     * the slots ease from where they already are (a no-op), with no snap. */
-    spread->layout(make_frame_ctx(output), filter, /*animate=*/true);
+    /* Cell-local slots don't move on the switch, so the re-centre eases, no snap. */
+    present->layout(make_world(output), filter, /*animate=*/true);
     repaint();
     g_axis.pin(1.0);
-    set_stage(stage::apps_spread);
+    set_phase(phase::apps);
     set_hook();
 }
 
 void controller::close_spread()
 {
-    if (cur != stage::desktop) { settle_to(0.0); }
+    if (current != phase::desktop) { settle_to(0.0); }
 }
 
 void controller::toggle_apps_spread()
 {
     if (inhibited()) { return; }
-    if (cur == stage::apps_spread) { settle_to(0.0); return; }
+    if (current == phase::apps) { settle_to(0.0); return; }
     filter.clear();
     settle_to(1.0);
 }
@@ -308,17 +278,17 @@ void controller::toggle_apps_spread()
 void controller::toggle_workspaces_spread()
 {
     if (inhibited()) { return; }
-    if (cur == stage::workspaces_spread) { settle_to(0.0); return; }
+    if (current == phase::wall) { settle_to(0.0); return; }
     settle_to(2.0);
 }
 
 void controller::spread_app(const std::vector<std::string>& ids)
 {
-    if (inhibited() || ids.empty() || (cur == stage::workspaces_spread)) { return; }
-    if ((cur == stage::apps_spread) && (filter == ids)) { settle_to(0.0); return; }
+    if (inhibited() || ids.empty() || (current == phase::wall)) { return; }
+    if ((current == phase::apps) && (filter == ids)) { settle_to(0.0); return; }
 
     filter = ids;
-    if (cur == stage::desktop) { settle_to(1.0); }
+    if (current == phase::desktop) { settle_to(1.0); }
     else { relayout(); }
 }
 
@@ -329,9 +299,8 @@ bool controller::cursor_here() const
 
 void controller::begin_slide()
 {
-    /* Mark the slide active first, then reconcile resources through the one path:
-     * apply_resources sees the active slide and grants the overview set (and lays
-     * out the spread), even from the desktop stage. */
+    /* Mark active first. apply_resources then grants the overview set even from
+     * the desktop. */
     slide->begin();
     apply_resources();
     set_hook();
@@ -352,9 +321,10 @@ void controller::slide_end()
 void controller::finish_slide()
 {
     if (auto ws = slide->finish()) { output->wset()->set_workspace(*ws); }
-    /* The stage that started the slide cleans up (desktop tears down, apps
-     * spread re-centres); cur is unchanged across a slide. */
-    stage_slide_settle();
+    /* current is unchanged across a slide. Each phase cleans up its own way. */
+    if (current == phase::desktop) { end_to_desktop(); }
+    else if (current == phase::apps) { recenter_apps_spread(); }
+    /* the wall does not re-centre */
 }
 
 void controller::gesture_begin(int fingers)
@@ -363,30 +333,27 @@ void controller::gesture_begin(int fingers)
 
     if (fingers == 4)
     {
-        if (stage_slides(cur)) { begin_slide(); }
+        if (slides(current)) { begin_slide(); }
         return;
     }
 
     if (fingers != 3) { return; }
 
-    /* Bound the swipe to one stage either side of the current stage (a discrete
-     * anchor), not the live g, so a single swipe cannot skip desktop -> wall. */
-    const double anchor = (cur == stage::workspaces_spread) ? 2.0
-        : (cur == stage::desktop) ? 0.0 : 1.0;
+    /* Bound to one phase either side, so a swipe can't skip desktop to wall. */
+    const double anchor = (current == phase::wall) ? 2.0
+        : (current == phase::desktop) ? 0.0 : 1.0;
     const double from = g_axis.value();
 
-    /* Lay the spread out up front so the first motion frame does not hitch.
-     * Filter is already empty here (it clears on the desktop boundary), so the
-     * swipe opens an unfiltered spread. */
-    if (cur == stage::desktop)
+    /* Lay out up front so the first motion frame does not hitch. */
+    if (current == phase::desktop)
     {
-        set_stage(stage::apps_spread);
+        set_phase(phase::apps);
         apply_resources();
     }
 
     const double lo = std::max(0.0, anchor - 1.0);
     const double hi = std::min(2.0, anchor + 1.0);
-    g_axis.begin(from, lo, hi);   /* marks the axis interacting until settle */
+    g_axis.begin(from, lo, hi);
     set_hook();
 }
 
@@ -397,10 +364,9 @@ void controller::gesture_update(double dx, double dy)
 
     g_axis.drive(-dy / SWIPE_DISTANCE);
 
-    /* Follow the stage across the spread <-> wall boundary while dragging, but
-     * never drop to desktop mid-gesture (that teardown would drop the grab). */
-    stage want = stage_at(g_axis.value(), cur);
-    if (want != stage::desktop) { set_stage(want); }
+    /* Follow the phase while dragging, but never to desktop (would drop the grab). */
+    phase want = phase_of(g_axis.value(), current);
+    if (want != phase::desktop) { set_phase(want); }
 
     output->render->schedule_redraw();
 }
@@ -410,7 +376,7 @@ void controller::gesture_end(double, double vy)
     if (slide->active()) { slide_end(); return; }
     if (!g_axis.interacting_now()) { return; }
 
-    g_axis.settle(vy);   /* ends the interacting state and animates to a stage */
+    g_axis.settle(vy);
     set_hook();
 }
 
@@ -420,95 +386,23 @@ void controller::gesture_pinch(int fingers, double scale)
     if (std::abs(scale - 1.0) >= PINCH_THRESHOLD) { toggle_workspaces_spread(); }
 }
 
-void controller::stage_on_button(const wlr_pointer_button_event& ev)
-{
-    if (ev.state != WL_POINTER_BUTTON_STATE_PRESSED)
-    {
-        /* The wall commits a thumbnail drag, or picks the clicked workspace. */
-        if ((cur == stage::workspaces_spread) && drag->release())
-        {
-            auto ctx = make_frame_ctx(output);
-            output->wset()->set_workspace(coords::cell_at(ctx, ctx.cursor));
-            settle_to(0.0);
-        }
-
-        return;
-    }
-
-    if (cur == stage::apps_spread)
-    {
-        auto ctx = make_frame_ctx(output);
-        if (auto v = spread->view_at(ctx.cursor)) { activate_window(v, ctx.cur_ws); }
-        else { close_spread(); }   /* a click on empty space dismisses the spread */
-    } else if (cur == stage::workspaces_spread)
-    {
-        drag->press();
-    }
-}
-
-void controller::stage_on_motion()
-{
-    if (cur != stage::workspaces_spread) { return; }
-
-    drag->motion();
-}
-
-void controller::stage_slide_settle()
-{
-    if (cur == stage::desktop) { end_to_desktop(); }
-    else if (cur == stage::apps_spread) { recenter_apps_spread(); }
-    /* the wall does not re-centre after a slide */
-}
-
 void controller::handle_pointer_button(const wlr_pointer_button_event& ev)
 {
     if (ev.button != BTN_LEFT) { return; }
-    stage_on_button(ev);
+    input->on_button(ev, make_world(output), current);
     update_cursor();
 }
 
 void controller::handle_pointer_motion(wf::pointf_t, uint32_t)
 {
-    stage_on_motion();
+    input->on_motion(current);
     update_cursor();
     output->render->schedule_redraw();
 }
 
 void controller::handle_keyboard_key(wf::seat_t*, wlr_keyboard_key_event ev)
 {
-    if ((ev.state != WL_KEYBOARD_KEY_STATE_PRESSED) || (cur == stage::desktop)) { return; }
-
-    /* Esc dismisses either spread. On the wall the arrows only move `sel`, never
-     * the workspace, so this settles back onto the workspace we opened from. */
-    if (ev.keycode == KEY_ESC) { settle_to(0.0); return; }
-
-    auto grid = output->wset()->get_workspace_grid_size();
-
-    if (cur == stage::workspaces_spread)
-    {
-        /* Wall: select then commit. Arrows move the ring over the static wall;
-         * Enter/Space enter the selected cell (mirrors clicking it). */
-        if ((ev.keycode == KEY_ENTER) || (ev.keycode == KEY_KPENTER) || (ev.keycode == KEY_SPACE))
-        {
-            output->wset()->set_workspace(sel);
-            settle_to(0.0);
-            return;
-        }
-
-        auto to = arrow_neighbor(sel, ev.keycode, grid);
-        if (to == sel) { return; }
-        sel = to;
-        repaint();
-        return;
-    }
-
-    /* App spread shows one workspace, so arrows switch it live and re-lay-out in
-     * place (the backdrop is kept across the relayout, so the desktop never blinks). */
-    auto cur_ws = output->wset()->get_current_workspace();
-    auto to = arrow_neighbor(cur_ws, ev.keycode, grid);
-    if (to == cur_ws) { return; }
-    output->wset()->set_workspace(to);
-    deferred.arm(output, [this] { relayout(); });
+    input->on_key(ev, make_world(output), current);
 }
 
 void controller::update_cursor()
@@ -518,31 +412,30 @@ void controller::update_cursor()
 
 void controller::handle_mapped(wf::view_mapped_signal *ev)
 {
-    if ((cur == stage::desktop) && !slide->active()) { return; }
+    if ((current == phase::desktop) && !slide->active()) { return; }
     if (!wf::toplevel_cast(ev->view)) { return; }
     relayout_if_idle();
 }
 
 void controller::handle_unmapped(wf::view_unmapped_signal *ev)
 {
-    if ((cur == stage::desktop) && !slide->active()) { return; }
-    auto v = wf::toplevel_cast(ev->view);
-    if (!v) { return; }
+    if ((current == phase::desktop) && !slide->active()) { return; }
+    auto view = wf::toplevel_cast(ev->view);
+    if (!view) { return; }
 
-    drag->forget(v);
-    spread->forget(v);
+    drag->forget(view);
+    present->forget(view);
     relayout_if_idle();
 }
 
 void controller::handle_focus_request(wf::view_focus_request_signal *ev)
 {
-    /* An app was activated from outside the spread (e.g. the launcher): close
-     * the spread so the activation is revealed. Our own window selection is
+    /* External activation (e.g. the launcher): close so it is revealed. Ours is
      * guarded by self_activating. */
-    if (self_activating || (cur == stage::desktop)) { return; }
+    if (self_activating || (current == phase::desktop)) { return; }
 
-    auto v = wf::toplevel_cast(ev->view);
-    if (!v || (v->get_output() != output)) { return; }
+    auto view = wf::toplevel_cast(ev->view);
+    if (!view || (view->get_output() != output)) { return; }
 
     close_spread();
 }

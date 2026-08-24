@@ -11,9 +11,7 @@
 
 namespace spatial
 {
-/**
- * Picks the nearest stage target, with optional fling bias.
- */
+/* Nearest whole level, biased by fling velocity. */
 inline double snap_target(double live, double velocity, double lo, double hi)
 {
     double t;
@@ -23,13 +21,12 @@ inline double snap_target(double live, double velocity, double lo, double hi)
     return std::clamp(t, lo, hi);
 }
 
-class tracker
+/* The continuous axis g in [0, 2], the plugin's only continuous state. Driven
+ * 1:1 by a gesture, settles to the nearest whole level on release. */
+class axis
 {
   public:
-    /**
-     * Tracks an interaction-driven value and animates settling transitions.
-     */
-    explicit tracker(const std::string& duration_option) :
+    explicit axis(const std::string& duration_option) :
         anim{wf::option_wrapper_t<wf::animation_description_t>{duration_option}}
     {}
 
@@ -53,6 +50,7 @@ class tracker
         live = std::clamp(base + accum, min, max);
     }
 
+    /* Absolute hold, for the slide pan. */
     void hold(double v) { interacting = true; live = std::clamp(v, min, max); }
 
     void settle(double velocity)

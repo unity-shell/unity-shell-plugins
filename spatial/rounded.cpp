@@ -4,10 +4,9 @@
 #include <wayfire/opengl.hpp>
 
 /*
- * The only file that touches raw OpenGL: crisp rounded corners on a live texture
- * have to be done on the GPU (a shader plus a bind/uniform/draw handshake). It's
- * quarantined here behind a small interface, following Wayfire's own plugins
- * (squeezimize.hpp / cube.cpp).
+ * The only file that touches raw OpenGL. Rounded corners on a live texture have
+ * to be done on the GPU with a shader. Kept behind a small interface, like
+ * Wayfire's own plugins (squeezimize.hpp, cube.cpp).
  */
 
 namespace spatial
@@ -56,9 +55,9 @@ void main() {
 )";
 
 /* Focus ring: no texture, a solid rounded-rect band around the card in `color`.
- * `d` is the signed distance to the card; the ring lives in [gap, gap+width].
+ * `d` is the signed distance to the card. The ring lives in [gap, gap+width].
  * `feather` (the AA half-width) is passed in physical px so the edge is equally
- * crisp at any output scale. */
+ * sharp at any output scale. */
 static const char *ring_frag_source =
     R"(
 #version 100
@@ -100,10 +99,10 @@ struct rounded_pass_t::impl
 
 namespace
 {
-/* The shared GPU handshake for both shaders: lazy-compile @prog, bind a
- * TRIANGLE_FAN quad (@pos) with the standard uv corners, let the caller set the
+/* Shared draw path for both shaders: lazy-compile @prog, bind a TRIANGLE_FAN
+ * quad (@pos) with the standard uv corners, let the caller set the
  * shader-specific uniforms, then premultiplied-blend it over @damage. Returns
- * false when the renderer is not GLES (the caller may fall back). */
+ * false when the renderer is not GLES, so the caller can fall back. */
 template<class SetUniforms>
 bool draw_quad(wf::render_pass_t& pass, const wf::render_target_t& target,
     OpenGL::program_t& prog, bool& compiled, const char *vs, const char *fs,
@@ -189,7 +188,7 @@ void rounded_pass_t::render_ring(wf::render_pass_t& pass, const wf::render_targe
     const float pos[] = {x, y + h, x + w, y + h, x + w, y, x, y};
 
     /* One physical pixel of AA, expressed in the shader's logical-px space, so
-     * crispness is independent of the output scale. */
+     * sharpness is independent of the output scale. */
     const float scale   = (target.scale > 0.0) ? (float) target.scale : 1.0f;
     const float feather = 1.0f / scale;
 

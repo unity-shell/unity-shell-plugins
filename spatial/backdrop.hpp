@@ -13,14 +13,13 @@
 #include <wayfire/config/types.hpp>
 #include <wayfire/option-wrapper.hpp>
 
-#include "coords.hpp"
+#include "geometry.hpp"
 #include "config.hpp"
 #include "rounded.hpp"
 
 namespace spatial
 {
-/* Scene stream node that captures the background/bottom layers into a texture,
- * so the live wallpaper can be re-drawn as the workspace cards. */
+/* Captures the background and bottom layers into a texture for the cards. */
 class wallpaper_stream_t : public wf::scene::node_t
 {
     class instance_t : public wf::scene::render_instance_t
@@ -84,8 +83,8 @@ class wallpaper_stream_t : public wf::scene::node_t
     std::string stringify() const override { return "spatial-wallpaper"; }
 };
 
-/* The workspace cards: the captured wallpaper drawn once per grid cell, with
- * rounded corners, and a focus ring on the current workspace as the wall opens. */
+/* The workspace cards: captured wallpaper per cell, rounded, with a ring on the
+ * selected cell as the wall opens. */
 class backdrop_node_t : public wf::scene::node_t
 {
     class instance_t : public wf::scene::render_instance_t
@@ -137,16 +136,16 @@ class backdrop_node_t : public wf::scene::node_t
         {
             data.pass->clear(data.damage, backdrop_color());
 
-            auto ctx = make_frame_ctx(self->output);
+            const world& ctx = self->frame_world;
             const auto bufsz = self->buffer.get_size();
             /* The focus ring fades in with the wall (absent on the app spread). */
             const float ring = (float) std::clamp(self->g - 1.0, 0.0, 1.0);
 
-            for (int i = 0; i < ctx.grid.width; i++)
+            for (int col = 0; col < ctx.grid.width; col++)
             {
-                for (int j = 0; j < ctx.grid.height; j++)
+                for (int row = 0; row < ctx.grid.height; row++)
                 {
-                    auto card = coords::cell_or_pane(ctx, i, j, self->g,
+                    auto card = geom::cell_or_pane(ctx, col, row, self->g,
                         self->pan_dir, self->pan_amount);
 
                     if ((card.x >= ctx.output.width) || (card.y >= ctx.output.height) ||
@@ -159,9 +158,8 @@ class backdrop_node_t : public wf::scene::node_t
                     tex->set_filter_mode(WLR_SCALE_FILTER_BILINEAR);
                     tex->set_source_box(wlr_fbox{0.0, 0.0, (double) bufsz.width, (double) bufsz.height});
 
-                    /* Cover-crop the wallpaper to the card's aspect so it never
-                     * distorts; the crop opens to the full buffer as the card
-                     * reaches the output-aspect wall cell. */
+                    /* Cover-crop to the card's aspect (no distortion). Opens to
+                     * the full buffer at the output-aspect wall cell. */
                     const double car = (double) card.width / std::max(1.0, (double) card.height);
                     const double bar = (double) bufsz.width / std::max(1, bufsz.height);
                     wf::pointf_t uv_scale{1.0, 1.0}, uv_off{0.0, 0.0};
@@ -171,8 +169,8 @@ class backdrop_node_t : public wf::scene::node_t
                     self->rounder.render(*data.pass, data.target, tex, card,
                         (float) CARD_CORNER_RADIUS, data.damage, uv_scale, uv_off);
 
-                    /* Ring the keyboard-selected cell (seeded on the current one). */
-                    if ((ring > 0.0f) && (i == self->sel.x) && (j == self->sel.y))
+                    /* Ring the selected cell (seeded on the current one). */
+                    if ((ring > 0.0f) && (col == self->sel.x) && (row == self->sel.y))
                     {
                         self->rounder.render_ring(*data.pass, data.target, card,
                             (float) CARD_CORNER_RADIUS, FOCUS_RING_GAP, FOCUS_RING_WIDTH,
@@ -191,14 +189,15 @@ class backdrop_node_t : public wf::scene::node_t
 
   public:
     wf::output_t *output;
+    world        frame_world{};   /* the controller's per-frame snapshot */
     double g = 0.0;
     wf::point_t  pan_dir{0, 0};
     double       pan_amount = 0.0;
-    wf::point_t  sel{0, 0};   /* keyboard-selected wall cell (seeded on wall entry) */
+    wf::point_t  sel{0, 0};   /* selected wall cell (seeded on wall entry) */
     std::shared_ptr<wallpaper_stream_t> stream;
     wf::auxilliary_buffer_t buffer;
     wf::regionf_t bg_damage;
-    rounded_pass_t rounder;   /* SDF rounded-corner blit + focus ring for the cards */
+    rounded_pass_t rounder;   /* SDF rounded-corner blit and focus ring for the cards */
 
     explicit backdrop_node_t(wf::output_t *o) :
         node_t(false), output(o), stream(std::make_shared<wallpaper_stream_t>(o))
@@ -209,8 +208,9 @@ class backdrop_node_t : public wf::scene::node_t
         bg_damage |= bbox;
     }
 
-    void update(double g_, wf::point_t dir, double amount, wf::point_t sel_)
+    void update(const world& ctx, double g_, wf::point_t dir, double amount, wf::point_t sel_)
     {
+        frame_world = ctx;
         g = g_;
         pan_dir = dir;
         pan_amount = amount;

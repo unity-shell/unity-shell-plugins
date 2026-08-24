@@ -5,14 +5,14 @@
 #include <wayfire/geometry.hpp>
 #include <wayfire/output.hpp>
 
-#include "tracker.hpp"
+#include "axis.hpp"
 
 namespace spatial
 {
-/**
+/*
  * A four-finger workspace pan. It accumulates the drag, animates the pan
  * fraction, and reports the workspace to commit on release. It owns only the
- * pan mechanics; the controller wires it to compositor resources, the frame
+ * pan mechanics. The controller wires it to compositor resources, the frame
  * loop, and the workspace set.
  */
 class slide_t
@@ -24,7 +24,10 @@ class slide_t
     void update(double dx, double dy);
     void release();
 
-    /** End the pan: clears active state and returns the workspace to commit. */
+    /* Auto-pan to a neighbour (keyboard arrow), committing on its own. */
+    void start_to(wf::point_t neighbour);
+
+    /* End the pan. Clears active state and returns the workspace to commit. */
     std::optional<wf::point_t> finish();
     void cancel() { active_ = false; }
 
@@ -35,11 +38,11 @@ class slide_t
 
   private:
     wf::point_t neighbor(wf::point_t from, double dx, double dy) const;
-    /* Commit iff the pan is past halfway toward an actual neighbour. */
+    /* Commit when the pan is past halfway toward a neighbour. */
     bool committing() { return (pan.value() > 0.5) && (target != from); }
 
     wf::output_t *output;
-    tracker pan{"spatial/duration"};
+    axis pan{"spatial/duration"};
     wf::point_t from{0, 0}, target{0, 0};
     double accum_x = 0, accum_y = 0;
     bool active_ = false;

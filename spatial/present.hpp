@@ -14,29 +14,15 @@
 #include <wayfire/scene-operations.hpp>
 #include <wayfire/plugins/common/geometry-animation.hpp>
 
-#include "coords.hpp"
+#include "geometry.hpp"
+#include "scene.hpp"
 
 namespace spatial
 {
-/**
- * Frame parameters consumed by the spread renderer on each repaint.
- */
-struct render_state
-{
-    double      g = 0.0;
-    wf::point_t pan_dir{0, 0};
-    double      pan_amount = 0.0;
-    wf::point_t sel{0, 0};   /* keyboard-selected wall cell (seeded on wall entry) */
-};
-
 class backdrop_node_t;
 
-/**
- * RAII enable/disable of a view's scene node against the enabled counter Wayfire
- * itself also drives. It pushes the requested state on construction and pops the
- * inverse on destruction, so the counter is always left exactly as found -- no
- * hand-balanced bookkeeping, and impossible to leak.
- */
+/* RAII node enable/disable. Wayfire shares the enabled counter, so we pop the
+ * inverse on destruction to leave it as found. */
 class node_toggle
 {
   public:
@@ -57,7 +43,7 @@ class node_toggle
     node_toggle& operator =(const node_toggle&) = delete;
     node_toggle& operator =(node_toggle&&)      = delete;
 
-    /* True when we surfaced a node (minimized view), false when we hid one. */
+    /* true = surfaced a minimized view, false = hid a filtered one. */
     bool surfaced() const { return enable; }
 
   private:
@@ -65,28 +51,27 @@ class node_toggle
     bool enable;
 };
 
-/**
- * Maintains spread layout, per-view transforms and backdrop composition.
- */
-class spread_t
+/* Lays out previews, drives their transforms and the backdrop, and records the
+ * pickable frame. */
+class present_t
 {
   public:
-    explicit spread_t(wf::output_t *output);
-    ~spread_t();
+    explicit present_t(wf::output_t *output);
+    ~present_t();
 
-    void ensure_layout(const frame_ctx& ctx, const std::vector<std::string>& filter);
-    /* Re-slot every preview. animate == false snaps slots to their targets (no
-     * ease) -- used when the on-screen positions are already correct and only the
-     * workspace-relative slot coordinates changed (e.g. re-centring after a slide
-     * commit). */
-    void layout(const frame_ctx& ctx, const std::vector<std::string>& filter, bool animate = true);
-    void render(const frame_ctx& ctx, const render_state& state);
-    void clear();
+    void ensure_layout(const world& ctx, const std::vector<std::string>& filter);
+    /* animate==false snaps instead of easing (on-screen positions already correct). */
+    void layout(const world& ctx, const std::vector<std::string>& filter, bool animate = true);
+    void render(const world& ctx, double g, wf::point_t pan_dir, double pan_amount,
+        wf::point_t sel);
 
-    /** True while any preview is still easing toward its slot. */
     bool animating();
 
+    void clear();
+
+    /* Drag support, backed by the same per-view geometry as the frame. */
     void forget(wayfire_toplevel_view view);
+
     void release_for_drag(wayfire_toplevel_view view);
     wayfire_toplevel_view view_at(wf::pointf_t local) const;
     wf::geometry_t thumb_of(wayfire_toplevel_view view) const;
@@ -94,12 +79,8 @@ class spread_t
   private:
     using transformer_t = std::shared_ptr<wf::scene::view_2d_transformer_t>;
 
-    /**
-     * A persistent preview unit: one top-level window plus its dialog family,
-     * with a single animated slot the whole family is transformed onto. Views
-     * survive relayouts so the slot can ease from the old arrangement to the new
-     * one instead of snapping.
-     */
+    /* A window plus its dialog family on one animated slot. Survives relayouts
+     * so the slot eases from the old arrangement to the new. */
     struct view_data
     {
         wf::point_t    cell{0, 0};
@@ -115,7 +96,6 @@ class spread_t
     void aim_slot(wayfire_toplevel_view view, wf::point_t cell, wf::geometry_t target,
         bool animate);
 
-    /* Force a view's scene node on/off, remembering how to restore it. */
     void override_node(wayfire_toplevel_view view, bool on);
     void restore_node(wayfire_toplevel_view view);
 
@@ -125,10 +105,10 @@ class spread_t
     wf::output_t *output;
     wf::option_wrapper_t<wf::animation_description_t> anim_dur{"spatial/duration"};
     std::map<wayfire_toplevel_view, view_data> views;
-    /* Views whose scene-node enabled state we forced (minimized views surfaced,
-     * filtered views hidden). Each toggle restores its node when erased/cleared. */
+    /* Forced node states (minimized surfaced, filtered hidden). Restored on erase. */
     std::map<wayfire_toplevel_view, node_toggle> node_overrides;
     std::shared_ptr<backdrop_node_t> backdrop;
     wf::point_t laid_out_ws{-1, -1};
+    frame frame_;
 };
 }

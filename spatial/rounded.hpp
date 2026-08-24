@@ -8,15 +8,15 @@
 
 namespace spatial
 {
-/**
+/*
  * Draws a texture into a rectangle with rounded corners, cut per-pixel by a
- * signed-distance-field in the fragment shader. Unlike a raster corner mask this
- * is resolution-independent (crisp at any output scale), anti-aliased, and free
- * of premultiplied-alpha fringing.
+ * signed-distance field in the fragment shader. Unlike a raster corner mask this
+ * stays sharp at any output scale, is anti-aliased, and has no
+ * premultiplied-alpha fringing.
  *
- * One instance owns the GL program; it compiles lazily on first render and frees
- * on destruction. Falls back to a plain (square) blit when the renderer is not
- * GLES, so the card still draws.
+ * One instance owns the GL program. It compiles on first render and frees on
+ * destruction. Falls back to a plain square blit when the renderer is not GLES,
+ * so the card still draws.
  */
 class rounded_pass_t
 {
@@ -38,10 +38,9 @@ class rounded_pass_t
         float radius, const wf::regionf_t& damage,
         const wf::pointf_t& uv_scale = {1.0, 1.0}, const wf::pointf_t& uv_off = {0.0, 0.0});
 
-    /**
+    /*
      * Draw a rounded-rect ring around @box (corner @radius) in @color: a stroke
      * of @width logical px starting @gap px outside the card edge, at @opacity.
-     * Crisp, scale-independent SDF.
      */
     void render_ring(wf::render_pass_t& pass, const wf::render_target_t& target,
         const wf::geometry_t& box, float radius, float gap, float width,

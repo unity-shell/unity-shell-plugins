@@ -1,4 +1,5 @@
 #include "controller.hpp"
+#include "geometry.hpp"
 
 #include <string>
 #include <vector>
@@ -13,9 +14,7 @@
 
 namespace spatial
 {
-/**
- * Global plugin entrypoint wiring activators and IPC control methods.
- */
+/* Global plugin entrypoint. Wires activators and IPC control methods. */
 class plugin : public wf::plugin_interface_t,
     public wf::per_output_tracker_mixin_t<controller>
 {
@@ -56,6 +55,18 @@ class plugin : public wf::plugin_interface_t,
             return wf::json_t{};
         });
 
+        /* Reserve edge space for the launcher in the spread layout only, not a
+         * real exclusive zone, so maximized windows are not resized. */
+        ipc->register_method("spatial/set-inset", [this] (wf::json_t data) -> wf::json_t
+        {
+            auto edge = [&] (const char *k) {
+                return (data.has_member(k) && data[k].is_int()) ? data[k].as_int() : 0;
+            };
+            set_inset(edge("left"), edge("right"), edge("top"), edge("bottom"));
+            for (auto& [o, c] : output_instance) { c->reflow_for_inset(); }
+            return wf::json_t{};
+        });
+
         ipc->register_method("spatial/inhibit", [this] (wf::json_t) -> wf::json_t
         {
             controller::inhibit();
@@ -75,6 +86,7 @@ class plugin : public wf::plugin_interface_t,
         fini_output_tracking();
         ipc->unregister_method("spatial/spread-app");
         ipc->unregister_method("spatial/close");
+        ipc->unregister_method("spatial/set-inset");
         ipc->unregister_method("spatial/inhibit");
         ipc->unregister_method("spatial/uninhibit");
     }

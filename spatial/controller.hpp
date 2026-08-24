@@ -14,69 +14,21 @@
 #include <wayfire/plugins/common/input-grab.hpp>
 #include <wayfire/nonstd/wlroots-full.hpp>
 
-#include "coords.hpp"
 #include "config.hpp"
-#include "tracker.hpp"
+#include "geometry.hpp"
+#include "axis.hpp"
 #include "resources.hpp"
-#include "renderer.hpp"
 #include "stage.hpp"
+#include "present.hpp"
 #include "slide.hpp"
 #include "gesture.hpp"
 #include "drag.hpp"
+#include "interaction.hpp"
 
 namespace spatial
 {
-/**
- * Runs a callback once on the next PRE-render frame, then disarms itself.
- * Used to defer a relayout until after a workspace-switch transaction has
- * committed (the next frame), so the spread re-centres against settled
- * geometry. Re-arming before it fires just replaces the pending callback.
- */
-class next_frame_call
-{
-  public:
-    void arm(wf::output_t *on, std::function<void ()> fn)
-    {
-        output  = on;
-        pending = std::move(fn);
-        if (!armed)
-        {
-            armed = true;
-            output->render->add_effect(&hook, wf::OUTPUT_EFFECT_PRE);
-        }
-        output->render->schedule_redraw();
-    }
-
-    void cancel() { if (armed) { disarm(); } }
-
-  private:
-    void disarm()
-    {
-        output->render->rem_effect(&hook);
-        armed   = false;
-        pending = nullptr;
-    }
-
-    wf::output_t *output = nullptr;
-    std::function<void ()> pending;
-    bool armed = false;
-    wf::effect_hook_t hook = [this] {
-        auto fn = std::move(pending);   /* grab before disarm clears pending */
-        disarm();
-        if (fn) { fn(); }
-    };
-};
-
-/**
- * Per-output spread controller (the State-pattern context).
- *
- * One continuous axis g in [0, 2] is the single source of truth: g==0 desktop,
- * g in (0, 1] the apps spread, g in (1, 2] the workspaces wall. A gesture drives
- * g 1:1; on release a tracker animates it to the nearest of {0, 1, 2}. The mode
- * follows g (mode::classify), and compositor resources are reconciled to the
- * current mode idempotently through RAII toggles, so there is a single teardown
- * path and nothing to hand-balance.
- */
+/* Per-output bridge: owns the axis, the resources, and the frame loop, and
+ * wires the gesture source, renderer, and input layer together. */
 class controller : public wf::per_output_plugin_instance_t,
     public wf::pointer_interaction_t,
     public wf::keyboard_interaction_t
@@ -89,6 +41,13 @@ class controller : public wf::per_output_plugin_instance_t,
     void toggle_workspaces_spread();
     void close_spread();
     void spread_app(const std::vector<std::string>& ids);
+    void reflow_for_inset();   /* the shell inset changed: reflow if a spread is settled */
+
+    /* Commands the input layer runs. */
+    void activate_window(wayfire_toplevel_view view, wf::point_t ws);
+    void enter_workspace(wf::point_t ws);
+    void switch_workspace(wf::point_t ws);
+    void repaint();
 
     static bool inhibited();
     static void inhibit();
@@ -102,22 +61,14 @@ class controller : public wf::per_output_plugin_instance_t,
 
     void settle_to(double target);
     void relayout(bool animate = true);
-    void activate_window(wayfire_toplevel_view view, wf::point_t ws);
     void end_to_desktop();
     void recenter_apps_spread();
 
-    /* Per-stage input behaviour: click and pointer-motion semantics differ by
-     * stage, everything else is shared (see stage.hpp). */
-    void stage_on_button(const wlr_pointer_button_event& ev);
-    void stage_on_motion();
-    void stage_slide_settle();
-
-    void set_stage(stage s);   /* the one writer of `cur`: clears the filter on the desktop edge */
+    void set_phase(phase stage);   /* clears the filter on desktop, seeds the ring on the wall */
     void reconcile();
     void apply_resources();
-    void publish_stage(stage s);   /* emit spatial/stage# for the panel; deduped by `published` */
+    void publish_phase(phase stage);   /* panel event, deduped by `published` */
     void render_frame();
-    void repaint();   /* render this frame now and schedule the next */
     void advance();
     void set_hook();
     void unhook();
@@ -136,30 +87,28 @@ class controller : public wf::per_output_plugin_instance_t,
     void handle_unmapped(wf::view_unmapped_signal *ev);
     void handle_focus_request(wf::view_focus_request_signal *ev);
     void relayout_if_idle();
-    bool can_relayout();   /* the spread sits settled: safe to reflow without fighting motion */
+    bool can_relayout();   /* true when the spread is settled and safe to reflow */
     bool cursor_here() const;
 
-    std::unique_ptr<spread_t> spread;
+    std::unique_ptr<present_t> present;
     std::unique_ptr<window_drag_t> drag;
     std::unique_ptr<wf::input_grab_t> grab;
     std::unique_ptr<slide_t> slide;
+    std::unique_ptr<interaction> input;
     swipe_gesture_t swipe;
 
-    tracker g_axis{"spatial/duration"};
+    axis g_axis{"spatial/duration"};
 
-    stage cur = stage::desktop;         /* input stage: latched, holds through a settle */
-    stage published = stage::desktop;   /* last stage sent to the panel: tracks the visible g */
-    wf::point_t sel{0, 0};              /* keyboard-selected wall cell (seeded on wall entry) */
+    phase current = phase::desktop;     /* input phase, latched through a settle */
+    phase published = phase::desktop;   /* last phase sent to the panel, tracks the visible g */
 
     std::optional<toggled> t_activate, t_top, t_grab, t_hooks;
 
     std::vector<std::string> filter;
-    bool   self_activating = false;
+    bool self_activating = false;
 
     wf::effect_hook_t pre_hook  = [this] { render_frame(); };
     wf::effect_hook_t post_hook = [this] { advance(); };
-
-    next_frame_call deferred;
 
     wf::plugin_activation_data_t grab_interface{
         .name = PLUGIN_NAME,

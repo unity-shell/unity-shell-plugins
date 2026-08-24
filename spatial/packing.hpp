@@ -14,14 +14,12 @@ struct placement_t
     wf::geometry_t        target;
 };
 
-/**
- * Row-packed preview layout for one workspace cell: windows keep their relative
- * sizes, small windows get a gentle scale boost, and the row count that
- * maximises preview scale (then space) wins. Never upscales past MAX_PREVIEW.
- *
- * Pure geometry -- returns each view's slot target within @area; the caller
- * animates the slots. @monitor_h is the output height (for the small-window
- * boost). Views are read top-to-bottom / left-to-right by their real position.
+/*
+ * Row-packed preview layout for one workspace cell. Windows keep their relative
+ * sizes, small windows get a scale boost, and the row count with the best
+ * preview scale wins. Never upscales past MAX_PREVIEW. Returns each view's slot
+ * target within @area. The caller animates the slots. @monitor_h is the output
+ * height, used for the small-window boost.
  */
 std::vector<placement_t> pack_cell(const std::vector<wayfire_toplevel_view>& views,
     wf::geometry_t area, double monitor_h);

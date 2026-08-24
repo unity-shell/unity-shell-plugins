@@ -1,6 +1,6 @@
 #include "packing.hpp"
 #include "config.hpp"
-#include "coords.hpp"
+#include "geometry.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -21,8 +21,8 @@ std::vector<placement_t> pack_cell(const std::vector<wayfire_toplevel_view>& vie
      * zero-height window gets SMALL_BOOST_MAX, a full-height one none. */
     constexpr double SMALL_BOOST_MAX = 1.5;
     constexpr double SMALL_BOOST_MIN = 1.0;
-    /* Row-count score: preview scale dominates; cell fill only breaks ties
-     * between row counts that yield near-equal scale. */
+    /* Row-count score: preview scale dominates. Cell fill only breaks ties
+     * between row counts with near-equal scale. */
     constexpr double SCALE_WEIGHT = 1.0;
     constexpr double SPACE_WEIGHT = 0.1;
 
@@ -41,7 +41,7 @@ std::vector<placement_t> pack_cell(const std::vector<wayfire_toplevel_view>& vie
         auto vg = v->get_geometry();
         const double bw = std::max(1.0, vg.width), bh = std::max(1.0, vg.height);
         const double ratio = std::clamp(bh / monitor_h, 0.0, 1.0);
-        const double boost = coords::lerp(SMALL_BOOST_MAX, SMALL_BOOST_MIN, ratio);
+        const double boost = geom::lerp(SMALL_BOOST_MAX, SMALL_BOOST_MIN, ratio);
         ws.push_back({v, bw, bh, boost, vg.x + bw / 2.0, vg.y + bh / 2.0});
     }
 

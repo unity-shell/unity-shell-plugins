@@ -10,15 +10,13 @@ namespace wf { class output_t; }
 
 namespace spatial
 {
-class spread_t;
+class present_t;
 
-/**
- * Handles picking, dragging and dropping spread thumbnails between workspaces.
- */
+/* Picks, drags and drops spread thumbnails between workspaces. */
 class window_drag_t
 {
   public:
-    window_drag_t(wf::output_t *output, spread_t *spread,
+    window_drag_t(wf::output_t *output, present_t *present,
         std::function<void (wayfire_toplevel_view, wf::point_t)> on_click,
         std::function<void ()> on_moved);
     ~window_drag_t();
@@ -27,8 +25,8 @@ class window_drag_t
 
     void press();
     void motion();
-    /* Returns true if the release was an empty click -- no thumbnail was dragged
-     * or picked -- which the caller uses to dismiss the wall. */
+    /* True when the release was an empty click (nothing dragged or picked). The
+     * caller uses it to pick the workspace under the cursor. */
     bool release();
     void cancel();
     void forget(wayfire_toplevel_view view);
