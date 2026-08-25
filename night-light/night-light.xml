@@ -1,0 +1,88 @@
+<?xml version="1.0"?>
+<wayfire>
+	<plugin name="night-light">
+		<_short>Night Light</_short>
+		<_long>Makes the display warmer in the evening.</_long>
+		<category>Utility</category>
+
+		<option name="enabled" type="bool">
+			<_short>Enabled</_short>
+			<_long>Turns night light on or off.</_long>
+			<default>false</default>
+		</option>
+
+		<option name="temperature" type="int">
+			<_short>Night temperature</_short>
+			<_long>How warm the display gets at night. Lower is warmer.</_long>
+			<default>4000</default>
+			<min>1000</min>
+			<max>6500</max>
+		</option>
+
+		<option name="day-temperature" type="int">
+			<_short>Day temperature</_short>
+			<_long>How warm the display is during the day. The highest value leaves it alone.</_long>
+			<default>6500</default>
+			<min>1000</min>
+			<max>6500</max>
+		</option>
+
+		<option name="schedule" type="string">
+			<_short>Schedule</_short>
+			<_long>Follow sunset and sunrise, or use hours you set.</_long>
+			<default>sunset-to-sunrise</default>
+			<desc>
+				<value>sunset-to-sunrise</value>
+				<_name>Sunset to sunrise</_name>
+			</desc>
+			<desc>
+				<value>manual</value>
+				<_name>Manual</_name>
+			</desc>
+		</option>
+
+		<option name="from" type="double">
+			<_short>Manual schedule start</_short>
+			<_long>When the warm period starts on the manual schedule, in hours after midnight.</_long>
+			<default>20.0</default>
+			<min>0.0</min>
+			<max>24.0</max>
+			<precision>0.25</precision>
+		</option>
+
+		<option name="to" type="double">
+			<_short>Manual schedule end</_short>
+			<_long>When the warm period ends on the manual schedule, in hours after midnight.</_long>
+			<default>6.0</default>
+			<min>0.0</min>
+			<max>24.0</max>
+			<precision>0.25</precision>
+		</option>
+
+		<option name="latitude" type="double">
+			<_short>Latitude</_short>
+			<_long>Your latitude, used to find sunset.</_long>
+			<default>0.0</default>
+			<min>-90.0</min>
+			<max>90.0</max>
+			<precision>0.01</precision>
+		</option>
+
+		<option name="longitude" type="double">
+			<_short>Longitude</_short>
+			<_long>Your longitude, used to find sunset.</_long>
+			<default>0.0</default>
+			<min>-180.0</min>
+			<max>180.0</max>
+			<precision>0.01</precision>
+		</option>
+
+		<option name="transition-duration" type="int">
+			<_short>Transition duration</_short>
+			<_long>How long the change between day and night takes, in seconds.</_long>
+			<default>3600</default>
+			<min>0</min>
+			<max>21600</max>
+		</option>
+	</plugin>
+</wayfire>

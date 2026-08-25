@@ -1,2 +1,3 @@
-option('gsettings', type: 'boolean', value: true, description: 'Build the GSettings configuration backend plugin.')
+option('gsettings', type: 'boolean', value: true, description: 'Build the GSettings configuration backend.')
 option('spatial', type: 'boolean', value: true, description: 'Build the spatial overview plugin.')
+option('night-light', type: 'boolean', value: true, description: 'Build the night light plugin.')

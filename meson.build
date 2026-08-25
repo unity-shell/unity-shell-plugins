@@ -22,8 +22,13 @@ if get_option('spatial')
   subdir('spatial')
 endif
 
+if get_option('night-light')
+  subdir('night-light')
+endif
+
 summary({
   'gsettings': get_option('gsettings'),
   'spatial':   get_option('spatial'),
+  'night-light': get_option('night-light'),
   'plugindir': plugindir,
 }, section: 'unity-shell-plugins')
